@@ -1,0 +1,622 @@
+#!/usr/bin/env bash
+# claudeme-resolve — endpoint resolver for claudeme
+# stdout: KEY=VALUE env block (for eval)
+# stderr: all user-facing output (prompts, warnings, confirmations)
+set -euo pipefail
+
+PROFILES_FILE="$HOME/.claudeme/profiles.json"
+SESSIONS_FILE="$HOME/.claudeme/sessions.json"
+ISOLATED_BASE="$HOME/.claudeme/isolated"
+
+# ── Utilities ──────────────────────────────────────────────────────────────────
+
+die()  { echo "claudeme: $*" >&2; exit 1; }
+msg()  { echo "  $*" >&2; }
+need_jq() { command -v jq &>/dev/null || die "jq is required — install with: brew install jq"; }
+
+ensure_profiles() {
+  mkdir -p "$(dirname "$PROFILES_FILE")"
+  [[ -f "$PROFILES_FILE" ]] || echo '{}' > "$PROFILES_FILE"
+}
+
+ensure_sessions() {
+  mkdir -p "$(dirname "$SESSIONS_FILE")"
+  [[ -f "$SESSIONS_FILE" ]] || echo '{}' > "$SESSIONS_FILE"
+}
+
+json_write() {
+  local file="$1" content="$2"
+  printf '%s\n' "$content" > "${file}.tmp"
+  mv "${file}.tmp" "$file"
+}
+
+profile_get() {
+  local name="$1"
+  ensure_profiles
+  local val; val=$(jq -e --arg n "$name" '.[$n] // empty' "$PROFILES_FILE" 2>/dev/null) || return 1
+  echo "$val"
+}
+
+profile_exists() { profile_get "$1" &>/dev/null; }
+
+session_get_profile() {
+  ensure_sessions
+  jq -r --arg d "$1" '.[$d].last_profile // empty' "$SESSIONS_FILE" 2>/dev/null || true
+}
+
+session_update() {
+  local dir="$1" last_profile="$2" last_url="$3"
+  ensure_sessions
+  local now; now=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  local updated; updated=$(jq \
+    --arg d "$dir" --arg p "$last_profile" --arg u "$last_url" --arg t "$now" \
+    '.[$d] = {last_profile: $p, last_url: $u, last_used: $t}' \
+    "$SESSIONS_FILE")
+  json_write "$SESSIONS_FILE" "$updated"
+}
+
+# ── Auth resolution ────────────────────────────────────────────────────────────
+# Prints KEY=VALUE lines to stdout. User messages to stderr.
+
+resolve_auth() {
+  local profile_json="$1"
+  local auth; auth=$(echo "$profile_json" | jq -r '.auth // "none"')
+  local url;  url=$(echo "$profile_json"  | jq -r '.url')
+
+  case "$auth" in
+    none)
+      echo "ANTHROPIC_BASE_URL=$url"
+      echo "ANTHROPIC_API_KEY=local"
+      ;;
+    api-key)
+      local key=""
+      local key_env;     key_env=$(echo "$profile_json"     | jq -r '.key_env // empty')
+      local key_literal; key_literal=$(echo "$profile_json" | jq -r '.key // empty')
+      if [[ -n "$key_env" ]]; then
+        key="${!key_env:-}"
+        [[ -z "$key" ]] && die "env var \$$key_env is empty — set it before running claudeme"
+      elif [[ -n "$key_literal" ]]; then
+        key="$key_literal"
+      else
+        die "profile has auth=api-key but no 'key' or 'key_env' configured"
+      fi
+      echo "ANTHROPIC_BASE_URL=$url"
+      echo "ANTHROPIC_API_KEY=$key"
+      ;;
+    gcp-adc)
+      command -v gcloud &>/dev/null || die "gcloud not found — install Google Cloud SDK"
+      local token; token=$(gcloud auth print-access-token --quiet 2>/dev/null) || true
+      [[ -z "$token" ]] && die "gcloud auth failed — run: gcloud auth login"
+      echo "ANTHROPIC_BASE_URL=$url"
+      echo "ANTHROPIC_API_KEY=$token"
+      ;;
+    aws)
+      local token="${AWS_SESSION_TOKEN:-}"
+      [[ -z "$token" ]] && die "AWS_SESSION_TOKEN is not set — configure AWS credentials first"
+      echo "ANTHROPIC_BASE_URL=$url"
+      echo "ANTHROPIC_API_KEY=$token"
+      ;;
+    *)
+      die "unknown auth type: $auth (valid: none, api-key, gcp-adc, aws)"
+      ;;
+  esac
+}
+
+# Prints CLAUDEME_MODEL=<name> if a model was resolved; prints nothing otherwise.
+# Always exits 0 — callers must not rely on exit code for "did we emit a line".
+resolve_model() {
+  local profile_json="$1"
+  local model_ref="$2"
+
+  if [[ -n "$model_ref" ]]; then
+    local resolved; resolved=$(echo "$profile_json" | jq -r --arg a "$model_ref" '.models[$a] // empty')
+    if [[ -n "$resolved" ]]; then
+      echo "CLAUDEME_MODEL=$resolved"
+    else
+      echo "CLAUDEME_MODEL=$model_ref"   # verbatim — user may have typed a full model name
+    fi
+  else
+    local default; default=$(echo "$profile_json" | jq -r '.model // empty')
+    [[ -n "$default" ]] && echo "CLAUDEME_MODEL=$default" || true
+  fi
+  return 0
+}
+
+# ── Local backend detection ────────────────────────────────────────────────────
+
+probe_backends() {
+  # Run probes in parallel; results written to temp files
+  local tmp="$1"
+  curl -sf --max-time 2 http://localhost:8080/health    >/dev/null 2>&1 && touch "$tmp/llama"   &
+  curl -sf --max-time 2 http://localhost:4000/v1/models >/dev/null 2>&1 && touch "$tmp/litellm" &
+  curl -sf --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1 && touch "$tmp/ollama"  &
+  curl -sf --max-time 2 http://localhost:1234/v1/models >/dev/null 2>&1 && touch "$tmp/edge"    &
+  wait
+}
+
+# Emit KEY=VALUE for a detected local backend (or die with setup hint)
+emit_local_from_probes() {
+  local tmp="$1"
+  if [[ -f "$tmp/llama" ]]; then
+    echo "ANTHROPIC_BASE_URL=http://localhost:8080"
+    echo "ANTHROPIC_API_KEY=local"
+  elif [[ -f "$tmp/litellm" ]]; then
+    echo "ANTHROPIC_BASE_URL=http://localhost:4000"
+    echo "ANTHROPIC_API_KEY=local"
+  elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
+    msg "error: Ollama/Edge Gallery requires a LiteLLM proxy on :4000"
+    msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+    rm -rf "$tmp"; exit 1
+  else
+    msg "error: no local model server found"
+    msg ""
+    msg "Supported backends:"
+    msg "  llama.cpp    — ./llama-server --model model.gguf --port 8080 --api-type anthropic"
+    msg "  LiteLLM      — litellm --model ollama/llama3.2 --port 4000"
+    msg "  Ollama       — ollama serve  (then start LiteLLM proxy on :4000)"
+    msg ""
+    msg "Or add a cloud profile: claudeme add <name> <url> --auth <type>"
+    rm -rf "$tmp"; exit 1
+  fi
+}
+
+# ── Subcommands ────────────────────────────────────────────────────────────────
+
+cmd_add() {
+  need_jq
+  [[ $# -lt 2 ]] && die "usage: claudeme add <name> <url> [--auth <type>] [--desc <text>] [--key-env <var>]"
+  local name="$1" url="$2"; shift 2
+  local auth="none" desc="" key="" key_env=""
+
+  local reserved_names=("local" "list" "add" "remove" "test" "models")
+  for r in "${reserved_names[@]}"; do
+    [[ "$name" == "$r" ]] && die "'$name' is reserved and cannot be used as a profile name"
+  done
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --auth)    auth="$2";    shift 2 ;;
+      --desc)    desc="$2";    shift 2 ;;
+      --key)     key="$2";     shift 2 ;;
+      --key-env) key_env="$2"; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+
+  ensure_profiles
+  profile_exists "$name" && die "profile '$name' already exists — remove it first with: claudeme remove $name"
+
+  case "$auth" in
+    none) ;;
+    api-key)
+      [[ -z "$key" && -z "$key_env" ]] && die "--key or --key-env is required for auth=api-key"
+      if [[ -n "$key_env" ]]; then
+        local val="${!key_env:-}"
+        [[ -z "$val" ]] && msg "warning: \$$key_env is currently empty — set it before using this profile"
+      fi
+      ;;
+    gcp-adc)
+      command -v gcloud &>/dev/null || die "gcloud not found — install Google Cloud SDK"
+      local token; token=$(gcloud auth print-access-token --quiet 2>/dev/null) || true
+      [[ -z "$token" ]] && die "gcloud auth failed — run: gcloud auth login"
+      ;;
+    aws)
+      [[ -z "${AWS_SESSION_TOKEN:-}" ]] && msg "warning: AWS_SESSION_TOKEN is not currently set"
+      ;;
+    *) die "unknown auth type: $auth (valid: none, api-key, gcp-adc, aws)" ;;
+  esac
+
+  if ! curl -sf --max-time 3 "$url" >/dev/null 2>&1 && \
+     ! curl -sf --max-time 3 "${url}/v1/models" >/dev/null 2>&1; then
+    msg "warning: $url is not reachable right now (profile saved anyway)"
+  fi
+
+  local entry; entry=$(jq -n \
+    --arg u "$url" --arg a "$auth" --arg d "$desc" --arg k "$key" --arg ke "$key_env" \
+    '{url: $u, auth: $a}
+     + (if $d != "" then {description: $d} else {} end)
+     + (if $k != "" then {key: $k} else {} end)
+     + (if $ke != "" then {key_env: $ke} else {} end)')
+  local updated; updated=$(jq --arg n "$name" --argjson e "$entry" '.[$n] = $e' "$PROFILES_FILE")
+  json_write "$PROFILES_FILE" "$updated"
+  echo "✅ Added profile '$name' ($url, auth: $auth)"
+}
+
+cmd_remove() {
+  need_jq
+  local name="${1:-}"
+  [[ -z "$name" ]] && die "usage: claudeme remove <name>"
+  ensure_profiles
+  profile_exists "$name" || die "profile '$name' not found"
+
+  ensure_sessions
+  local affected; affected=$(jq -r --arg n "$name" \
+    'to_entries[] | select(.value.last_profile == $n) | .key' "$SESSIONS_FILE" 2>/dev/null || true)
+  if [[ -n "$affected" ]]; then
+    msg "warning: these directories last used the '$name' profile:"
+    while IFS= read -r d; do msg "  $d"; done <<< "$affected"
+    printf "\n  Remove anyway? (y/n) " >&2
+    local reply; read -r reply </dev/tty
+    [[ "$reply" =~ ^[Yy]$ ]] || { msg "Aborted."; exit 0; }
+  fi
+
+  local updated; updated=$(jq --arg n "$name" 'del(.[$n])' "$PROFILES_FILE")
+  json_write "$PROFILES_FILE" "$updated"
+  echo "✅ Removed profile '$name'"
+}
+
+cmd_list() {
+  need_jq
+  local tmp; tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+
+  probe_backends "$tmp"
+
+  echo "" >&2
+  echo "  Local backends:" >&2
+  local found_any=false
+  [[ -f "$tmp/llama" ]]   && { printf "    ✓ %-12s %s\n" "llama.cpp" "http://localhost:8080" >&2; found_any=true; }
+  [[ -f "$tmp/litellm" ]] && { printf "    ✓ %-12s %s\n" "LiteLLM"   "http://localhost:4000" >&2; found_any=true; }
+  [[ -f "$tmp/ollama" ]]  && { printf "    ✓ %-12s %s\n" "Ollama"    "http://localhost:11434" >&2; found_any=true; }
+  [[ -f "$tmp/edge" ]]    && { printf "    ✓ %-12s %s\n" "Edge"      "http://localhost:1234" >&2; found_any=true; }
+  $found_any || echo "    (none running)" >&2
+
+  echo "" >&2
+  echo "  Named profiles:" >&2
+  ensure_profiles
+  local count; count=$(jq 'length' "$PROFILES_FILE")
+  if [[ "$count" -eq 0 ]]; then
+    echo "    (none — add one with: claudeme add <name> <url> --auth <type>)" >&2
+  else
+    jq -r 'to_entries[] |
+      "\(.key)\t\(.value.url)\t[\(.value.auth // "none")]\(if .value.description then " — \(.value.description)" else "" end)"' \
+      "$PROFILES_FILE" | \
+      awk -F'\t' '{printf "    %-14s %-42s %s\n", $1, $2, $3}' >&2
+  fi
+  echo "" >&2
+}
+
+cmd_test() {
+  need_jq
+  local name="${1:-}"
+  [[ -z "$name" ]] && die "usage: claudeme test <name>"
+  local profile_json; profile_json=$(profile_get "$name") || die "profile '$name' not found"
+  local url; url=$(echo "$profile_json" | jq -r '.url')
+
+  msg "Testing profile '$name' ($url)..."
+
+  local env_block; env_block=$(resolve_auth "$profile_json") || exit 1
+  local token; token=$(echo "$env_block" | grep '^ANTHROPIC_API_KEY=' | cut -d= -f2-)
+
+  local http_code; http_code=$(curl -s --max-time 5 -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer $token" \
+    -H "x-api-key: $token" \
+    "${url}/v1/models" 2>/dev/null) || http_code="000"
+
+  if [[ "$http_code" == "200" ]]; then
+    echo "  ✅ '$name' is reachable and returned models (HTTP $http_code)"
+  else
+    echo "  ❌ '$name' returned HTTP $http_code from ${url}/v1/models"
+    exit 1
+  fi
+}
+
+cmd_profile_models() {
+  need_jq
+  local name="${1:-}"
+  [[ -z "$name" ]] && die "usage: claudeme <name> list"
+  local profile_json; profile_json=$(profile_get "$name") || die "profile '$name' not found"
+  local url; url=$(echo "$profile_json" | jq -r '.url')
+
+  local env_block; env_block=$(resolve_auth "$profile_json") || exit 1
+  local token; token=$(echo "$env_block" | grep '^ANTHROPIC_API_KEY=' | cut -d= -f2-)
+  local default_model; default_model=$(echo "$profile_json" | jq -r '.model // empty')
+
+  local response; response=$(curl -sf --max-time 5 \
+    -H "Authorization: Bearer $token" \
+    -H "x-api-key: $token" \
+    "${url}/v1/models" 2>/dev/null) || die "failed to reach ${url}/v1/models — is the endpoint running?"
+
+  # Parse live model IDs (handle both OpenAI and other formats)
+  local live_models=()
+  while IFS= read -r m; do
+    [[ -n "$m" ]] && live_models+=("$m")
+  done < <(echo "$response" | jq -r '(.data // .models // .[]) | if type == "object" then .id // .name else . end' 2>/dev/null | sort || true)
+
+  echo "" >&2
+  echo "  Models on $name ($url):" >&2
+  echo "" >&2
+
+  # Collect aliased full model names while printing
+  local aliased=()
+  local alias_count=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local alias full
+    alias=$(echo "$line" | cut -d= -f1)
+    full=$(echo "$line"  | cut -d= -f2-)
+    local marker=""
+    [[ "$full" == "$default_model" ]] && marker="  ← default"
+    printf "    %-12s → %-36s%s\n" "$alias" "$full" "$marker" >&2
+    aliased+=("$full")
+    ((alias_count++)) || true
+  done < <(echo "$profile_json" | jq -r 'if .models then .models | to_entries[] | "\(.key)=\(.value)" else empty end' 2>/dev/null || true)
+
+  [[ "$alias_count" -eq 0 ]] && echo "    (no aliases configured — use: claudeme models $name add <alias> <model>)" >&2
+
+  # Live models with no alias
+  local unaliased=()
+  for m in "${live_models[@]+"${live_models[@]}"}"; do
+    local skip=false
+    for a in "${aliased[@]+"${aliased[@]}"}"; do
+      [[ "$m" == "$a" ]] && { skip=true; break; }
+    done
+    $skip && continue
+    unaliased+=("$m")
+  done
+
+  if [[ ${#unaliased[@]} -gt 0 ]]; then
+    echo "" >&2
+    echo "  Also available (no alias):" >&2
+    for m in "${unaliased[@]}"; do
+      local marker=""
+      [[ "$m" == "$default_model" ]] && marker="  ← default"
+      printf "    %-14s %s%s\n" "" "$m" "$marker" >&2
+    done
+  fi
+  echo "" >&2
+}
+
+cmd_models() {
+  need_jq
+  local name="${1:-}" subcmd="${2:-}"
+  [[ -z "$name" || -z "$subcmd" ]] && die "usage: claudeme models <name> add|remove|default|list [args]"
+  ensure_profiles
+
+  case "$subcmd" in
+    list) cmd_profile_models "$name" ;;
+
+    add)
+      local alias="${3:-}" model="${4:-}"
+      [[ -z "$alias" || -z "$model" ]] && die "usage: claudeme models <name> add <alias> <full-model-name>"
+      local profile_json; profile_json=$(profile_get "$name") || die "profile '$name' not found"
+      local existing; existing=$(echo "$profile_json" | jq -r --arg a "$alias" '.models[$a] // empty')
+      [[ -n "$existing" ]] && die "alias '$alias' already exists in '$name' (maps to $existing) — remove it first"
+      local updated; updated=$(jq \
+        --arg n "$name" --arg a "$alias" --arg m "$model" \
+        '.[$n].models[$a] = $m' "$PROFILES_FILE")
+      json_write "$PROFILES_FILE" "$updated"
+      echo "✅ Added alias '$alias' → '$model' in profile '$name'"
+      ;;
+
+    remove)
+      local alias="${3:-}"
+      [[ -z "$alias" ]] && die "usage: claudeme models <name> remove <alias>"
+      local profile_json; profile_json=$(profile_get "$name") || die "profile '$name' not found"
+      local existing; existing=$(echo "$profile_json" | jq -r --arg a "$alias" '.models[$a] // empty')
+      [[ -z "$existing" ]] && die "alias '$alias' not found in profile '$name'"
+      local default_model; default_model=$(echo "$profile_json" | jq -r '.model // empty')
+      [[ "$existing" == "$default_model" ]] && \
+        msg "warning: removing the current default model alias — set a new default with: claudeme models $name default <alias>"
+      local updated; updated=$(jq --arg n "$name" --arg a "$alias" 'del(.[$n].models[$a])' "$PROFILES_FILE")
+      json_write "$PROFILES_FILE" "$updated"
+      echo "✅ Removed alias '$alias' from profile '$name'"
+      ;;
+
+    default)
+      local alias="${3:-}"
+      [[ -z "$alias" ]] && die "usage: claudeme models <name> default <alias>"
+      local profile_json; profile_json=$(profile_get "$name") || die "profile '$name' not found"
+      local full; full=$(echo "$profile_json" | jq -r --arg a "$alias" '.models[$a] // empty')
+      [[ -z "$full" ]] && die "alias '$alias' not found in '$name' — add it first with: claudeme models $name add $alias <model>"
+      local updated; updated=$(jq --arg n "$name" --arg m "$full" '.[$n].model = $m' "$PROFILES_FILE")
+      json_write "$PROFILES_FILE" "$updated"
+      echo "✅ Default model for '$name' set to '$full' (via alias '$alias')"
+      ;;
+
+    *) die "unknown models subcommand: $subcmd (valid: add, remove, default, list)" ;;
+  esac
+}
+
+# ── Resolution — local auto-detect or menu ─────────────────────────────────────
+
+cmd_resolve_local_forced() {
+  local tmp; tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  probe_backends "$tmp"
+  emit_local_from_probes "$tmp"
+}
+
+cmd_resolve_auto() {
+  # Build a combined list of local backends + named profiles, show menu if multiple
+  local tmp; tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  probe_backends "$tmp"
+
+  # Options: each entry is "label|url|kind" where kind is "local" or "profile:<name>"
+  local opts_label=() opts_url=() opts_kind=()
+
+  [[ -f "$tmp/llama" ]] && {
+    opts_label+=("local   llama.cpp at http://localhost:8080")
+    opts_url+=("http://localhost:8080")
+    opts_kind+=("local")
+  }
+  if [[ -f "$tmp/litellm" ]]; then
+    # LiteLLM is up — it may front ollama/edge/custom
+    if [[ -f "$tmp/ollama" ]]; then
+      opts_label+=("local   Ollama via LiteLLM at http://localhost:4000")
+    elif [[ -f "$tmp/edge" ]]; then
+      opts_label+=("local   Edge Gallery via LiteLLM at http://localhost:4000")
+    else
+      opts_label+=("local   LiteLLM proxy at http://localhost:4000")
+    fi
+    opts_url+=("http://localhost:4000")
+    opts_kind+=("local")
+  elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
+    msg "warning: Ollama/Edge Gallery detected but LiteLLM proxy on :4000 is not running"
+    msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+  fi
+
+  # Append named profiles
+  ensure_profiles
+  while IFS=$'\t' read -r pname purl; do
+    [[ -z "$pname" ]] && continue
+    opts_label+=("$pname   $purl")
+    opts_url+=("$purl")
+    opts_kind+=("profile:$pname")
+  done < <(jq -r 'to_entries[] | [.key, .value.url] | @tsv' "$PROFILES_FILE" 2>/dev/null || true)
+
+  local n="${#opts_label[@]}"
+
+  if [[ "$n" -eq 0 ]]; then
+    msg "error: no endpoints available"
+    msg ""
+    msg "Options:"
+    msg "  • Start a local model server (llama.cpp, Ollama + LiteLLM, etc.)"
+    msg "  • Add a cloud profile: claudeme add <name> <url> --auth <type>"
+    exit 1
+  fi
+
+  local chosen=0
+  if [[ "$n" -gt 1 ]]; then
+    msg ""
+    msg "  Select endpoint:"
+    local i=1
+    for label in "${opts_label[@]}"; do
+      msg "    $i) $label"
+      ((i++)) || true
+    done
+    msg ""
+    printf "    Choice: " >&2
+    local choice; read -r choice </dev/tty
+    msg ""
+    [[ "$choice" =~ ^[0-9]+$ ]] || die "invalid choice: $choice"
+    [[ "$choice" -ge 1 && "$choice" -le "$n" ]] || die "choice out of range (1–$n)"
+    chosen=$(( choice - 1 ))
+  fi
+
+  local url="${opts_url[$chosen]}"
+  local kind="${opts_kind[$chosen]}"
+
+  if [[ "$kind" == "local" ]]; then
+    echo "ANTHROPIC_BASE_URL=$url"
+    echo "ANTHROPIC_API_KEY=local"
+  else
+    local pname="${kind#profile:}"
+    local profile_json; profile_json=$(profile_get "$pname")
+    resolve_auth "$profile_json"
+    resolve_model "$profile_json" ""
+  fi
+}
+
+# ── Main resolve ───────────────────────────────────────────────────────────────
+
+cmd_resolve() {
+  need_jq
+  local isolated=false do_continue=false profile_name="" model_ref=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --isolated)  isolated=true;         shift ;;
+      --continue)  do_continue=true;      shift ;;
+      --profile)   profile_name="$2";     shift 2 ;;
+      --model-ref) model_ref="$2";        shift 2 ;;
+      "") shift ;;
+      *) die "unknown resolver arg: $1" ;;
+    esac
+  done
+
+  local work_dir="$PWD"
+  local env_block=""
+  local resolved_profile="" resolved_url=""
+
+  # ── STEP 1: Determine endpoint ──────────────────────────────────────────────
+
+  if [[ "$profile_name" == "local" ]]; then
+    env_block=$(cmd_resolve_local_forced)
+    resolved_profile=""
+    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+
+  elif [[ -n "$profile_name" ]]; then
+    local profile_json; profile_json=$(profile_get "$profile_name") || {
+      msg "error: profile '$profile_name' not found"
+      msg ""
+      msg "Available profiles:"
+      jq -r 'keys[] | "  \(.)"' "$PROFILES_FILE" 2>/dev/null || msg "  (none)"
+      exit 1
+    }
+    env_block=$(resolve_auth "$profile_json")
+    local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+    [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+    resolved_profile="$profile_name"
+    resolved_url=$(echo "$profile_json" | jq -r '.url')
+
+  elif $do_continue; then
+    local last; last=$(session_get_profile "$work_dir")
+    if [[ -n "$last" && "$last" != "null" ]]; then
+      msg "→ Continuing on $last"
+      local profile_json; profile_json=$(profile_get "$last") || die "last-used profile '$last' no longer exists — run: claudeme list"
+      env_block=$(resolve_auth "$profile_json")
+      local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+      [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+      resolved_profile="$last"
+      resolved_url=$(echo "$profile_json" | jq -r '.url')
+    else
+      msg "→ Continuing on local"
+      env_block=$(cmd_resolve_local_forced)
+      resolved_profile=""
+      resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+    fi
+
+  elif [[ -n "${CLAUDEME_PROFILE:-}" ]]; then
+    local profile_json; profile_json=$(profile_get "$CLAUDEME_PROFILE") || \
+      die "CLAUDEME_PROFILE='$CLAUDEME_PROFILE' not found in profiles"
+    env_block=$(resolve_auth "$profile_json")
+    local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+    [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+    resolved_profile="$CLAUDEME_PROFILE"
+    resolved_url=$(echo "$profile_json" | jq -r '.url')
+
+  elif [[ -n "${CLAUDE_LOCAL_URL:-}" ]]; then
+    env_block="ANTHROPIC_BASE_URL=$CLAUDE_LOCAL_URL"$'\n'"ANTHROPIC_API_KEY=local"
+    resolved_profile=""
+    resolved_url="$CLAUDE_LOCAL_URL"
+
+  else
+    env_block=$(cmd_resolve_auto)
+    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+    resolved_profile=""
+  fi
+
+  # ── STEP 4: Isolated directory ──────────────────────────────────────────────
+
+  if $isolated; then
+    local hash; hash=$(printf '%s' "$work_dir" | shasum -a 256 | cut -c1-8)
+    local iso_dir="$ISOLATED_BASE/$hash"
+    mkdir -p "$iso_dir"
+    env_block+=$'\n'"CLAUDEME_SESSION_DIR=$iso_dir"
+    session_update "$iso_dir" "$resolved_profile" "$resolved_url"
+  else
+    session_update "$work_dir" "$resolved_profile" "$resolved_url"
+  fi
+
+  # ── STEP 5: Emit env block (stdout only, no blank lines) ───────────────────
+  printf '%s\n' "$env_block" | grep -v '^[[:space:]]*$'
+}
+
+# ── Dispatch ───────────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+  add)            cmd_add            "${@:2}" ;;
+  remove)         cmd_remove         "${@:2}" ;;
+  list)           cmd_list                    ;;
+  test)           cmd_test           "${@:2}" ;;
+  profile-models) cmd_profile_models "${@:2}" ;;
+  models)         cmd_models         "${@:2}" ;;
+  --isolated|--continue|--profile|--model-ref|"")
+                  cmd_resolve        "$@"     ;;
+  *)              die "unknown subcommand: $1 — try: claudeme list" ;;
+esac
