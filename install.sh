@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# install.sh — installs claudeme
+# install.sh — installs claudeme and dependencies
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"
-RESOLVER_DEST="/usr/local/bin/claudeme-resolve"
+RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"
 ZSHRC="$HOME/.zshrc"
 MARKER_BEGIN="# ── claudeme ──────────────────────────────────────────────────────────────────"
 MARKER_END="# ── end claudeme ──────────────────────────────────────────────────────────────"
 
-# ── The claudeme shell function ────────────────────────────────────────────────
-# Written as a heredoc so install.sh can update it in-place without the user
-# needing to re-source manually (they still need to run: source ~/.zshrc)
+# ── Utilities ──────────────────────────────────────────────────────────────────
 
-SHELL_FUNCTION='
+msg() { echo "  $*"; }
+check() { echo "  ✅ $*"; }
+warn() { echo "  ⚠️  $*"; }
+err() { echo "  ❌ $*"; }
+
+# ── The claudeme shell function ────────────────────────────────────────────────
+
+SHELL_FUNCTION='# Ensure ~/.local/bin is in PATH
+export PATH="$HOME/.local/bin:$PATH"
+
 claudeme() {
   # Route management subcommands directly to the resolver
   case "${1:-}" in
@@ -96,44 +103,120 @@ echo "║   claudeme installer                            ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
-# 1. Copy resolver to /usr/local/bin
-echo "  Installing claudeme-resolve to $RESOLVER_DEST"
-cp "$RESOLVER_SRC" "$RESOLVER_DEST"
-chmod +x "$RESOLVER_DEST"
-echo "  ✅ Done"
-
-# 2. Check jq
-echo ""
-if command -v jq &>/dev/null; then
-  echo "  ✅ jq found: $(jq --version)"
+# 1. Ensure ~/.local/bin exists
+msg "Checking ~/.local/bin..."
+if [[ ! -d "$HOME/.local/bin" ]]; then
+  mkdir -p "$HOME/.local/bin"
+  check "Created ~/.local/bin"
 else
-  echo "  ⚠️  jq not found — install it with: brew install jq"
+  check "~/.local/bin exists"
 fi
 
-# 3. Write shell function to ~/.zshrc (idempotent: remove old block first)
+# 2. Copy resolver to ~/.local/bin
 echo ""
-echo "  Updating $ZSHRC..."
+msg "Installing claudeme-resolve..."
+if [[ -f "$RESOLVER_DEST" ]]; then
+  # Check if it's different
+  if ! diff -q "$RESOLVER_SRC" "$RESOLVER_DEST" &>/dev/null; then
+    cp "$RESOLVER_SRC" "$RESOLVER_DEST"
+    chmod +x "$RESOLVER_DEST"
+    check "Updated claudeme-resolve"
+  else
+    check "claudeme-resolve already up to date"
+  fi
+else
+  cp "$RESOLVER_SRC" "$RESOLVER_DEST"
+  chmod +x "$RESOLVER_DEST"
+  check "Installed claudeme-resolve"
+fi
+
+# 3. Check and install dependencies
+echo ""
+msg "Checking dependencies..."
+
+# Check jq
+if command -v jq &>/dev/null; then
+  check "jq found: $(jq --version)"
+else
+  warn "jq not found"
+  if command -v brew &>/dev/null; then
+    msg "Installing jq via Homebrew..."
+    brew install jq
+    check "jq installed"
+  else
+    err "Please install jq manually: brew install jq"
+    exit 1
+  fi
+fi
+
+# Check claude CLI
+if command -v claude &>/dev/null; then
+  check "claude CLI found"
+else
+  warn "claude CLI not found"
+  msg "Install from: https://docs.anthropic.com/claude-code"
+fi
+
+# Check Python (for litellm)
+if command -v python3 &>/dev/null; then
+  check "python3 found: $(python3 --version)"
+else
+  warn "python3 not found — required for litellm"
+fi
+
+# Check/install litellm
+if command -v litellm &>/dev/null; then
+  # Check if litellm[proxy] is properly installed
+  if litellm --version &>/dev/null; then
+    check "litellm found: $(litellm --version 2>&1 | head -1 || echo 'installed')"
+  else
+    warn "litellm found but proxy dependencies missing"
+    msg "Reinstalling with proxy support..."
+    if command -v pip3 &>/dev/null; then
+      pip3 install --upgrade 'litellm[proxy]' --quiet
+    else
+      pip install --upgrade 'litellm[proxy]' --quiet
+    fi
+    check "litellm proxy dependencies installed"
+  fi
+else
+  warn "litellm not found"
+  if command -v pip3 &>/dev/null || command -v pip &>/dev/null; then
+    msg "Installing litellm with proxy support..."
+    if command -v pip3 &>/dev/null; then
+      pip3 install 'litellm[proxy]' --quiet
+    else
+      pip install 'litellm[proxy]' --quiet
+    fi
+    if command -v litellm &>/dev/null && litellm --version &>/dev/null; then
+      check "litellm installed successfully"
+    else
+      warn "litellm installation may require adding Python bin to PATH"
+      msg "Try: export PATH=\"\$HOME/Library/Python/3.*/bin:\$PATH\""
+    fi
+  else
+    err "pip not found — cannot install litellm"
+    msg "Install manually: pip3 install 'litellm[proxy]'"
+  fi
+fi
+
+# 4. Write shell function to ~/.zshrc (idempotent: remove old block first)
+echo ""
+msg "Updating $ZSHRC..."
+
+# Create .zshrc if it doesn't exist
+touch "$ZSHRC"
 
 # Remove existing claudeme block if present
 if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
-  # Use python3 for portable in-place removal (macOS sed -i needs a suffix)
-  python3 - "$ZSHRC" "$MARKER_BEGIN" "$MARKER_END" <<'PYEOF'
-import sys
-path, begin, end = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(path) as f:
-    lines = f.readlines()
-out, skip = [], False
-for line in lines:
-    if line.rstrip() == begin:
-        skip = True
-    if not skip:
-        out.append(line)
-    if skip and line.rstrip() == end:
-        skip = False
-with open(path, 'w') as f:
-    f.writelines(out)
-PYEOF
-  echo "  (removed previous claudeme block)"
+  # Use perl for portable in-place editing
+  perl -i -ne "
+    if (/$MARKER_BEGIN/../$MARKER_END/) {
+      next;
+    }
+    print;
+  " "$ZSHRC"
+  msg "(removed previous claudeme block)"
 fi
 
 # Append fresh block
@@ -144,15 +227,25 @@ fi
   echo "$MARKER_END"
 } >> "$ZSHRC"
 
-echo "  ✅ Shell function written"
+check "Shell function written to ~/.zshrc"
+
+# 5. Ensure ~/.local/bin is in current PATH for verification
+export PATH="$HOME/.local/bin:$PATH"
 
 echo ""
-echo "  Run this to activate now:"
-echo "    source ~/.zshrc"
+echo "╔══════════════════════════════════════════════════╗"
+echo "║   Installation complete!                        ║"
+echo "╚══════════════════════════════════════════════════╝"
 echo ""
-echo "  Optional — alias 'claude' to 'claudeme' so all muscle memory works:"
-echo "    echo 'alias claude=claudeme' >> ~/.zshrc && source ~/.zshrc"
+msg "Run this to activate now:"
+msg "  source ~/.zshrc"
 echo ""
-echo "  Escape hatch to reach Anthropic directly:"
-echo "    command claude          # bypasses the alias"
+msg "Then verify:"
+msg "  claudeme list"
+echo ""
+msg "Optional — alias 'claude' to 'claudeme':"
+msg "  echo 'alias claude=claudeme' >> ~/.zshrc && source ~/.zshrc"
+echo ""
+msg "Escape hatch to reach Anthropic directly:"
+msg "  command claude"
 echo ""

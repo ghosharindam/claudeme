@@ -145,7 +145,13 @@ emit_local_from_probes() {
     echo "ANTHROPIC_API_KEY=local"
   elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
     msg "error: Ollama/Edge Gallery requires a LiteLLM proxy on :4000"
-    msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+    msg ""
+    if ! command -v litellm &>/dev/null; then
+      msg "litellm is not installed. Run the installer to set it up:"
+      msg "  cd ~/Documents/my_workspace/claudeme && ./install.sh"
+    else
+      msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+    fi
     rm -rf "$tmp"; exit 1
   else
     msg "error: no local model server found"
@@ -457,7 +463,11 @@ cmd_resolve_auto() {
     opts_kind+=("local")
   elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
     msg "warning: Ollama/Edge Gallery detected but LiteLLM proxy on :4000 is not running"
-    msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+    if ! command -v litellm &>/dev/null; then
+      msg "litellm is not installed. Run: cd ~/Documents/my_workspace/claudeme && ./install.sh"
+    else
+      msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+    fi
   fi
 
   # Append named profiles

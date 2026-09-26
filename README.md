@@ -16,8 +16,9 @@ claudeme -c       # continue last session on the same endpoint you used last tim
 
 | Tool | Required for | Install |
 |---|---|---|
-| `jq` | Everything | `brew install jq` |
+| `jq` | Everything | Auto-installed by installer (via Homebrew) |
 | `claude` CLI | Running sessions | [Claude Code docs](https://docs.anthropic.com/claude-code) |
+| `litellm` | Ollama/Edge Gallery bridge | Auto-installed by installer (via pip) |
 | `gcloud` CLI | GCP profiles (`--auth gcp-adc`) | `brew install --cask google-cloud-sdk` |
 | `aws` CLI | AWS profiles (`--auth aws`) | `brew install awscli` |
 
@@ -26,11 +27,16 @@ claudeme -c       # continue last session on the same endpoint you used last tim
 **1. Run the installer:**
 
 ```bash
-cd ~/Documents/my_workspace/claude_local
+cd ~/Documents/my_workspace/claudeme
 ./install.sh
 ```
 
-This copies `claudeme-resolve` to `/usr/local/bin` and writes the `claudeme` shell function to `~/.zshrc`.
+The installer is **fully idempotent** — run it multiple times safely. It will:
+- Install `claudeme-resolve` to `~/.local/bin`
+- Auto-install `jq` (via Homebrew) if missing
+- Auto-install `litellm[proxy]` (via pip) if missing
+- Write the `claudeme` shell function to `~/.zshrc`
+- Only update what's missing or outdated
 
 **2. Activate in your current shell:**
 
@@ -75,7 +81,11 @@ command claude -c
 
 ### Re-installing / updating
 
-Run `./install.sh` again at any time — it removes the old shell function block before writing the new one, so it is safe to re-run.
+Run `./install.sh` again at any time — it's fully idempotent:
+- Detects what's already installed
+- Only installs or updates missing/outdated components
+- Safe to run multiple times
+- No sudo required (installs to `~/.local/bin`)
 
 ---
 
