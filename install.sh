@@ -51,6 +51,9 @@ err() { echo "  ❌ $*"; }   # Error
 SHELL_FUNCTION='# Ensure ~/.local/bin is in PATH (where claudeme-resolve lives)
 export PATH="$HOME/.local/bin:$PATH"
 
+# Typo-tolerant alias (claudme → claudeme)
+alias claudme=claudeme
+
 claudeme() {
   # Route management subcommands directly to the resolver
   case "${1:-}" in

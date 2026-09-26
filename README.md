@@ -10,6 +10,8 @@ claudeme -c       # continue last session on the same endpoint you used last tim
 
 **Architecture:** `claudeme` is a shell function (in `~/.zshrc`) that calls `claudeme-resolve` (the resolver script) to determine which endpoint to use, then execs `claude` with the appropriate environment variables. The verb form `-resolve` follows Unix convention for commands that perform an action ("resolve this endpoint configuration").
 
+**Typo-tolerant:** The installer also creates an alias `claudme` → `claudeme` for common typos.
+
 ---
 
 ## Install
