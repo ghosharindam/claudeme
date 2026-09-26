@@ -1,17 +1,27 @@
 #!/usr/bin/env bash
 # claudeme-resolve — endpoint resolver for claudeme
-# stdout: KEY=VALUE env block (for eval)
-# stderr: all user-facing output (prompts, warnings, confirmations)
+#
+# This script determines WHERE to send Claude Code requests:
+#   - Local model servers (llama.cpp, LiteLLM, Ollama)
+#   - Named cloud profiles (GCP, AWS, custom endpoints)
+#
+# OUTPUT CONVENTION:
+#   stdout: KEY=VALUE env block (for shell eval) — sets ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, etc.
+#   stderr: all user-facing messages (prompts, warnings, errors)
+#
+# This separation lets the shell function capture only the env vars while showing messages to the user.
+
 set -euo pipefail
 
-PROFILES_FILE="$HOME/.claudeme/profiles.json"
-SESSIONS_FILE="$HOME/.claudeme/sessions.json"
-ISOLATED_BASE="$HOME/.claudeme/isolated"
+# Storage locations for profiles and session history
+PROFILES_FILE="$HOME/.claudeme/profiles.json"   # Named cloud endpoints (gcp, aws, etc.)
+SESSIONS_FILE="$HOME/.claudeme/sessions.json"   # Tracks last-used endpoint per directory
+ISOLATED_BASE="$HOME/.claudeme/isolated"        # Session storage for --isolated mode
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
-die()  { echo "claudeme: $*" >&2; exit 1; }
-msg()  { echo "  $*" >&2; }
+die()  { echo "claudeme: $*" >&2; exit 1; }  # Error message + exit
+msg()  { echo "  $*" >&2; }                   # User-facing message (to stderr)
 need_jq() { command -v jq &>/dev/null || die "jq is required — install with: brew install jq"; }
 
 ensure_profiles() {
@@ -56,7 +66,14 @@ session_update() {
 }
 
 # ── Auth resolution ────────────────────────────────────────────────────────────
+# Converts a profile's auth config into env vars that Claude Code understands.
 # Prints KEY=VALUE lines to stdout. User messages to stderr.
+#
+# Supported auth types:
+#   none      - No auth (local servers, public endpoints)
+#   api-key   - Static API key (from env var or profile JSON)
+#   gcp-adc   - Google Cloud Application Default Credentials (auto-refresh)
+#   aws       - AWS session token (from AWS_SESSION_TOKEN env var)
 
 resolve_auth() {
   local profile_json="$1"
@@ -65,17 +82,23 @@ resolve_auth() {
 
   case "$auth" in
     none)
+      # Local servers or public endpoints — no real auth needed
       echo "ANTHROPIC_BASE_URL=$url"
-      echo "ANTHROPIC_API_KEY=local"
+      echo "ANTHROPIC_API_KEY=local"  # Placeholder value (some servers require any non-empty key)
       ;;
+
     api-key)
+      # Static API key — can be stored in profile or read from env var
       local key=""
       local key_env;     key_env=$(echo "$profile_json"     | jq -r '.key_env // empty')
       local key_literal; key_literal=$(echo "$profile_json" | jq -r '.key // empty')
+
       if [[ -n "$key_env" ]]; then
-        key="${!key_env:-}"
+        # Read key from environment variable (safer — keeps secrets out of JSON)
+        key="${!key_env:-}"  # ${!var} is bash indirect expansion: read value of variable named $key_env
         [[ -z "$key" ]] && die "env var \$$key_env is empty — set it before running claudeme"
       elif [[ -n "$key_literal" ]]; then
+        # Key stored directly in profile (less secure but convenient for testing)
         key="$key_literal"
       else
         die "profile has auth=api-key but no 'key' or 'key_env' configured"
@@ -83,19 +106,25 @@ resolve_auth() {
       echo "ANTHROPIC_BASE_URL=$url"
       echo "ANTHROPIC_API_KEY=$key"
       ;;
+
     gcp-adc)
+      # Google Cloud Application Default Credentials
+      # Gets a fresh access token on each invocation (auto-refresh)
       command -v gcloud &>/dev/null || die "gcloud not found — install Google Cloud SDK"
       local token; token=$(gcloud auth print-access-token --quiet 2>/dev/null) || true
       [[ -z "$token" ]] && die "gcloud auth failed — run: gcloud auth login"
       echo "ANTHROPIC_BASE_URL=$url"
       echo "ANTHROPIC_API_KEY=$token"
       ;;
+
     aws)
+      # AWS session token — expects AWS_SESSION_TOKEN to be set by AWS CLI or similar
       local token="${AWS_SESSION_TOKEN:-}"
       [[ -z "$token" ]] && die "AWS_SESSION_TOKEN is not set — configure AWS credentials first"
       echo "ANTHROPIC_BASE_URL=$url"
       echo "ANTHROPIC_API_KEY=$token"
       ;;
+
     *)
       die "unknown auth type: $auth (valid: none, api-key, gcp-adc, aws)"
       ;;
@@ -123,27 +152,68 @@ resolve_model() {
 }
 
 # ── Local backend detection ────────────────────────────────────────────────────
+# Auto-detects local model servers by probing standard ports.
+#
+# DETECTION STRATEGY:
+#   - llama.cpp:    :8080/health     — Direct Anthropic API support (with --api-type anthropic)
+#   - LiteLLM:      :4000/v1/models  — Can front Ollama/OpenAI/etc and translate to Anthropic format
+#   - Ollama:       :11434/api/tags  — Native Ollama API (needs LiteLLM bridge for Anthropic format)
+#   - Edge Gallery: :1234/v1/models  — LM Studio / Edge Gallery (needs LiteLLM bridge)
+#
+# WHY THESE PORTS?
+#   - Industry standard defaults that users expect
+#   - Avoids collisions between different servers
 
 probe_backends() {
-  # Run probes in parallel; results written to temp files
-  local tmp="$1"
+  local tmp="$1"  # Temp directory to store probe results
+
+  # Run all probes in parallel (wait at end) — faster than sequential checks
+  # Each successful probe creates a marker file in $tmp/
+
+  # llama.cpp — probes /health endpoint (standard for llama-server)
   curl -sf --max-time 2 http://localhost:8080/health    >/dev/null 2>&1 && touch "$tmp/llama"   &
+
+  # LiteLLM — probes /v1/models (OpenAI-compatible endpoint)
   curl -sf --max-time 2 http://localhost:4000/v1/models >/dev/null 2>&1 && touch "$tmp/litellm" &
+
+  # Ollama — probes /api/tags (lists available models)
   curl -sf --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1 && touch "$tmp/ollama"  &
+
+  # Edge Gallery / LM Studio — probes /v1/models
   curl -sf --max-time 2 http://localhost:1234/v1/models >/dev/null 2>&1 && touch "$tmp/edge"    &
-  wait
+
+  wait  # Wait for all background probes to complete
 }
 
-# Emit KEY=VALUE for a detected local backend (or die with setup hint)
+# Converts probe results into env vars for Claude Code.
+# PRIORITY ORDER (first match wins):
+#   1. llama.cpp  — Direct connection (no bridge needed)
+#   2. LiteLLM    — Can translate any backend to Anthropic format
+#   3. Ollama/Edge — ERROR: requires LiteLLM bridge to translate API format
+#   4. None found — ERROR: show setup instructions
+#
+# WHY THIS ORDER?
+#   - llama.cpp first: if it's running with --api-type anthropic, use it directly (best performance)
+#   - LiteLLM second: might be fronting Ollama/other backends
+#   - Ollama/Edge error: they don't speak Anthropic API format, need LiteLLM as translator
+
 emit_local_from_probes() {
   local tmp="$1"
+
   if [[ -f "$tmp/llama" ]]; then
+    # llama.cpp detected — connect directly
+    # Assumes it's running with --api-type anthropic flag
     echo "ANTHROPIC_BASE_URL=http://localhost:8080"
     echo "ANTHROPIC_API_KEY=local"
+
   elif [[ -f "$tmp/litellm" ]]; then
+    # LiteLLM detected — use it (might be fronting Ollama, OpenAI, etc.)
     echo "ANTHROPIC_BASE_URL=http://localhost:4000"
     echo "ANTHROPIC_API_KEY=local"
+
   elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
+    # Ollama or Edge Gallery detected, but NO LiteLLM bridge
+    # These servers don't speak Anthropic API format — they need LiteLLM as a translator
     msg "error: Ollama/Edge Gallery requires a LiteLLM proxy on :4000"
     msg ""
     if ! command -v litellm &>/dev/null; then
@@ -153,7 +223,9 @@ emit_local_from_probes() {
       msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
     fi
     rm -rf "$tmp"; exit 1
+
   else
+    # No local backends detected
     msg "error: no local model server found"
     msg ""
     msg "Supported backends:"

@@ -8,6 +8,8 @@ claudeme gcp      # use a named cloud endpoint
 claudeme -c       # continue last session on the same endpoint you used last time
 ```
 
+**Architecture:** `claudeme` is a shell function (in `~/.zshrc`) that calls `claudeme-resolve` (the resolver script) to determine which endpoint to use, then execs `claude` with the appropriate environment variables. The verb form `-resolve` follows Unix convention for commands that perform an action ("resolve this endpoint configuration").
+
 ---
 
 ## Install

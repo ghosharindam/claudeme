@@ -1,24 +1,54 @@
 #!/usr/bin/env bash
 # install.sh — installs claudeme and dependencies
+#
+# WHAT THIS DOES:
+#   1. Installs claudeme-resolve binary to ~/.local/bin (no sudo needed)
+#   2. Adds claudeme shell function to ~/.zshrc
+#   3. Auto-installs dependencies: jq, litellm[proxy]
+#
+# IDEMPOTENCY:
+#   Safe to run multiple times. It will:
+#   - Skip already-installed components
+#   - Update outdated components
+#   - Never break existing setup
+#
+# DEPENDENCIES:
+#   - jq:              JSON parser (auto-installed via Homebrew)
+#   - litellm[proxy]:  API translator for Ollama/Edge Gallery (auto-installed via pip)
+#   - claude CLI:      Required but user must install separately (link shown)
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"
-RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"
-ZSHRC="$HOME/.zshrc"
+RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"           # Source script in repo
+RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"    # Destination (user-writable, no sudo)
+ZSHRC="$HOME/.zshrc"                                  # Shell config file
+
+# Markers to identify the claudeme block in .zshrc (for safe updates)
 MARKER_BEGIN="# ── claudeme ──────────────────────────────────────────────────────────────────"
 MARKER_END="# ── end claudeme ──────────────────────────────────────────────────────────────"
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
-msg() { echo "  $*"; }
-check() { echo "  ✅ $*"; }
-warn() { echo "  ⚠️  $*"; }
-err() { echo "  ❌ $*"; }
+msg() { echo "  $*"; }      # Regular message
+check() { echo "  ✅ $*"; }  # Success
+warn() { echo "  ⚠️  $*"; }  # Warning
+err() { echo "  ❌ $*"; }   # Error
 
 # ── The claudeme shell function ────────────────────────────────────────────────
+# This function is written to ~/.zshrc and provides the `claudeme` command.
+#
+# FLOW:
+#   1. Route management commands (add/remove/list) to claudeme-resolve binary
+#   2. For session commands: call claudeme-resolve to determine endpoint
+#   3. Eval the returned env vars (ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, etc.)
+#   4. Exec the real `claude` CLI with those env vars set
+#
+# WHY A SHELL FUNCTION?
+#   - Must eval env vars in the current shell (can't do this from a binary)
+#   - Can exec to replace the shell process (clean process tree)
 
-SHELL_FUNCTION='# Ensure ~/.local/bin is in PATH
+SHELL_FUNCTION='# Ensure ~/.local/bin is in PATH (where claudeme-resolve lives)
 export PATH="$HOME/.local/bin:$PATH"
 
 claudeme() {
@@ -103,7 +133,10 @@ echo "║   claudeme installer                            ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 
+# ── Installation Steps ────────────────────────────────────────────────────────
+
 # 1. Ensure ~/.local/bin exists
+# WHY: This is where we install claudeme-resolve (user-writable, no sudo needed)
 msg "Checking ~/.local/bin..."
 if [[ ! -d "$HOME/.local/bin" ]]; then
   mkdir -p "$HOME/.local/bin"
@@ -113,6 +146,7 @@ else
 fi
 
 # 2. Copy resolver to ~/.local/bin
+# IDEMPOTENCY: Only copy if missing or different (uses diff to check)
 echo ""
 msg "Installing claudeme-resolve..."
 if [[ -f "$RESOLVER_DEST" ]]; then
@@ -131,10 +165,12 @@ else
 fi
 
 # 3. Check and install dependencies
+# Each dependency is checked before installing (idempotent)
 echo ""
 msg "Checking dependencies..."
 
-# Check jq
+# ── jq: JSON parser ──
+# Required by claudeme-resolve to read/write profile JSON files
 if command -v jq &>/dev/null; then
   check "jq found: $(jq --version)"
 else
@@ -149,7 +185,9 @@ else
   fi
 fi
 
-# Check claude CLI
+# ── claude CLI ──
+# The actual Claude Code CLI that we're wrapping
+# Must be installed separately by the user
 if command -v claude &>/dev/null; then
   check "claude CLI found"
 else
@@ -157,16 +195,19 @@ else
   msg "Install from: https://docs.anthropic.com/claude-code"
 fi
 
-# Check Python (for litellm)
+# ── Python 3 ──
+# Required for litellm
 if command -v python3 &>/dev/null; then
   check "python3 found: $(python3 --version)"
 else
   warn "python3 not found — required for litellm"
 fi
 
-# Check/install litellm
+# ── litellm[proxy]: API translator ──
+# WHY NEEDED: Ollama and Edge Gallery don't speak Anthropic API format
+# The [proxy] extras include all dependencies for running as an HTTP proxy
 if command -v litellm &>/dev/null; then
-  # Check if litellm[proxy] is properly installed
+  # Check if litellm[proxy] is properly installed (test by running --version)
   if litellm --version &>/dev/null; then
     check "litellm found: $(litellm --version 2>&1 | head -1 || echo 'installed')"
   else
@@ -200,16 +241,19 @@ else
   fi
 fi
 
-# 4. Write shell function to ~/.zshrc (idempotent: remove old block first)
+# 4. Write shell function to ~/.zshrc
+# IDEMPOTENCY: Remove old claudeme block before adding new one
+# This lets you re-run the installer to update the function
 echo ""
 msg "Updating $ZSHRC..."
 
 # Create .zshrc if it doesn't exist
 touch "$ZSHRC"
 
-# Remove existing claudeme block if present
+# Remove existing claudeme block if present (identified by markers)
 if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
-  # Use perl for portable in-place editing
+  # Use perl for portable in-place editing (works on macOS and Linux)
+  # Delete all lines between MARKER_BEGIN and MARKER_END (inclusive)
   perl -i -ne "
     if (/$MARKER_BEGIN/../$MARKER_END/) {
       next;
@@ -219,7 +263,7 @@ if grep -qF "$MARKER_BEGIN" "$ZSHRC" 2>/dev/null; then
   msg "(removed previous claudeme block)"
 fi
 
-# Append fresh block
+# Append fresh block with markers
 {
   echo ""
   echo "$MARKER_BEGIN"
@@ -230,6 +274,7 @@ fi
 check "Shell function written to ~/.zshrc"
 
 # 5. Ensure ~/.local/bin is in current PATH for verification
+# This only affects the installer process — the shell function also adds it
 export PATH="$HOME/.local/bin:$PATH"
 
 echo ""
