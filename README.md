@@ -32,14 +32,20 @@ claudeme -c       # continue last session on the same endpoint you used last tim
 
 ```bash
 cd ~/Documents/my_workspace/claudeme
-./install.sh
+./install.sh                              # Default: installs to ~/.local/bin (no sudo)
+```
+
+**Custom install location:**
+```bash
+./install.sh --prefix /usr/local/bin      # System-wide (needs sudo)
+INSTALL_DIR=/opt/bin ./install.sh         # Via environment variable
 ```
 
 The installer is **fully idempotent** — run it multiple times safely. It will:
-- Install `claudeme-resolve` to `~/.local/bin`
+- Install `claudeme-resolve` to chosen directory (default: `~/.local/bin`)
+- Auto-detect your shell (bash/zsh/fish) and update the appropriate config file
 - Auto-install `jq` (via Homebrew) if missing
 - Auto-install `litellm[proxy]` (via pip) if missing
-- Write the `claudeme` shell function to `~/.zshrc`
 - Only update what's missing or outdated
 
 **2. Activate in your current shell:**
