@@ -1,0 +1,95 @@
+# LiteLLM Multi-Model Configuration
+# This enables model switching with /model command in Claude Code
+#
+# Usage:
+#   litellm --config litellm_multi_model.yaml --port 4000
+#   claudeme
+#   /model fast      # Switch to llama3.2 8B
+#   /model smart     # Switch to llama3.1 70B
+
+model_list:
+  # ── llama.cpp models ─────────────────────────────────────────────────────────
+  # Run multiple llama-server instances on different ports
+
+  - model_name: fast
+    litellm_params:
+      model: openai/localhost:8080/v1
+      api_base: http://localhost:8080
+      # Start with: llama-server --model llama-3.2-8B.gguf --port 8080 --api-type anthropic
+
+  - model_name: smart
+    litellm_params:
+      model: openai/localhost:8081/v1
+      api_base: http://localhost:8081
+      # Start with: llama-server --model llama-3.1-70B.gguf --port 8081 --api-type anthropic
+
+  - model_name: code
+    litellm_params:
+      model: openai/localhost:8082/v1
+      api_base: http://localhost:8082
+      # Start with: llama-server --model qwen2.5-coder-7B.gguf --port 8082 --api-type anthropic
+
+  # ── Ollama models ────────────────────────────────────────────────────────────
+  # Requires: ollama serve (runs on :11434)
+
+  - model_name: ollama-llama3
+    litellm_params:
+      model: ollama/llama3.2:8b
+
+  - model_name: ollama-deepseek
+    litellm_params:
+      model: ollama/deepseek-r1:7b
+
+  - model_name: ollama-qwen-coder
+    litellm_params:
+      model: ollama/qwen2.5-coder:7b
+
+  # ── Cloud fallback ───────────────────────────────────────────────────────────
+  # Requires API keys in environment
+
+  - model_name: cloud-sonnet
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5
+      api_key: ${ANTHROPIC_API_KEY}
+
+  - model_name: cloud-opus
+    litellm_params:
+      model: anthropic/claude-opus-5-5
+      api_key: ${ANTHROPIC_API_KEY}
+
+  - model_name: gemini-pro
+    litellm_params:
+      model: gemini/gemini-2.0-flash-exp
+      api_key: ${GEMINI_API_KEY}
+
+# ── Router settings ──────────────────────────────────────────────────────────
+# Optional: Add load balancing, fallback, retries
+
+general_settings:
+  # Default model if none specified
+  default_model: fast
+
+  # Log requests
+  # success_callback: ["langfuse"]
+  # failure_callback: ["langfuse"]
+
+  # Retries and timeouts
+  # num_retries: 3
+  # request_timeout: 600
+
+# ── Usage Examples ───────────────────────────────────────────────────────────
+#
+# 1. Basic model switching:
+#    claudeme
+#    /model fast      # Use llama 8B
+#    /model smart     # Use llama 70B
+#
+# 2. Start with specific model:
+#    claudeme
+#    --model smart    # Start with llama 70B
+#
+# 3. Cloud fallback:
+#    /model cloud-sonnet   # Use Anthropic API
+#
+# 4. Ollama integration:
+#    /model ollama-qwen-coder  # Use Ollama's qwen coder
