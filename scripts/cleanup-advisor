@@ -50,6 +50,7 @@ show_app_ram_totals() {
       if (app ~ /^[Ss]lack/) app = "Slack"
       if (app ~ /^[Dd]iscord/) app = "Discord"
       if (app ~ /^[Tt]eams/) app = "Microsoft Teams"
+      if (app ~ /Virtual Machine Service for Claude/ || app ~ /^[Cc]laude/) app = "Claude Code"
 
       ram[app] += $2
       count[app]++
@@ -68,6 +69,9 @@ show_app_ram_totals() {
 
     # Suggest kill command
     case "$app" in
+      "Claude Code")
+        echo "#   ⚠️  Don't kill - this is your current Claude Code session!"
+        ;;
       "Visual Studio Code")
         echo "#   Kill: code --stop  or  pkill -x 'Code'"
         ;;
