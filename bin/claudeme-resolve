@@ -1148,17 +1148,25 @@ resume_session() {
     msg "✓ $tool running"
     msg "⚠️  Model not loaded anymore"
     msg ""
-    
+
     # Check memory before loading
     local available_gb=$(get_available_memory_gb)
     if check_model_fits "$model" "$available_gb"; then
       msg "→ Loading $model into memory..."
-      msg "  (This may take 10-30 seconds)"
+      msg "  (This may take a moment...)"
       msg ""
-      
-      # TODO: Actually load the model
-      # For ollama: ollama run $model (then exit immediately)
-      
+
+      # Load the model (Ollama)
+      if [[ "$tool" == "ollama" ]]; then
+        # Use ollama pull to load model into memory
+        # This is faster than ollama run and doesn't require interaction
+        if command -v ollama >/dev/null 2>&1; then
+          ollama pull "$model" >/dev/null 2>&1
+          msg "✅ $model loaded"
+          msg ""
+        fi
+      fi
+
       # Return endpoint
       echo "$endpoint"
       return 0
@@ -1170,12 +1178,38 @@ resume_session() {
   fi
 }
 
-# Check if continuing session (-c flag)
-# This should be called from main flow
-is_continue_session() {
-  # Check if -c flag was passed
-  # This will be integrated into main arg parsing
-  return 1  # Placeholder
+# Detect tool from endpoint URL
+detect_tool_from_endpoint() {
+  local endpoint=$1
+
+  case "$endpoint" in
+    *:8080*)      echo "llama-server" ;;
+    *:4000*)      echo "litellm" ;;
+    *:11434*)     echo "ollama" ;;
+    *)            echo "unknown" ;;
+  esac
+}
+
+# Get the recommended model for current system
+get_selected_model() {
+  # First check preferences for user's preferred models
+  local preferred=$(get_config "$PREFERENCES" ".preferred_models[0]")
+
+  if [[ -n "$preferred" && "$preferred" != "null" ]]; then
+    echo "$preferred"
+    return 0
+  fi
+
+  # Fall back to detecting what's loaded
+  local loaded=$(detect_ollama_models | head -1)
+
+  if [[ -n "$loaded" ]]; then
+    echo "$loaded"
+    return 0
+  fi
+
+  # Ultimate fallback
+  echo "unknown"
 }
 
 
@@ -1384,11 +1418,47 @@ cmd_resolve() {
     local iso_dir="$ISOLATED_BASE/$hash"
     mkdir -p "$iso_dir"
     env_block+=$'\n'"CLAUDEME_SESSION_DIR=$iso_dir"
-    session_update "$iso_dir" "$resolved_profile" "$resolved_url"
-    # TODO: Save full session (tool, model) for Phase 5 resume
+
+    # ── Phase 5: Save full session (tool + model + endpoint) ─────────────────
+    # For local sessions, capture tool and model for instant resume
+    local save_tool="unknown" save_model="unknown"
+
+    # Only save full session for local endpoints (not cloud profiles)
+    if [[ -z "$resolved_profile" ]]; then
+      save_tool=$(detect_tool_from_endpoint "$resolved_url")
+      save_model=$(get_selected_model)
+
+      # Check if model is currently loaded (optimization flag)
+      local model_loaded=false
+      if [[ "$save_tool" == "ollama" ]] && is_model_loaded "$save_model" "$save_tool"; then
+        model_loaded=true
+      fi
+
+      save_session "$save_tool" "$save_model" "$resolved_url" "$model_loaded"
+    else
+      # Cloud profile - just save profile info
+      session_update "$iso_dir" "$resolved_profile" "$resolved_url"
+    fi
   else
-    session_update "$work_dir" "$resolved_profile" "$resolved_url"
-    # TODO: Save full session (tool, model) for Phase 5 resume
+    # ── Phase 5: Save full session (tool + model + endpoint) ─────────────────
+    local save_tool="unknown" save_model="unknown"
+
+    # Only save full session for local endpoints (not cloud profiles)
+    if [[ -z "$resolved_profile" ]]; then
+      save_tool=$(detect_tool_from_endpoint "$resolved_url")
+      save_model=$(get_selected_model)
+
+      # Check if model is currently loaded (optimization flag)
+      local model_loaded=false
+      if [[ "$save_tool" == "ollama" ]] && is_model_loaded "$save_model" "$save_tool"; then
+        model_loaded=true
+      fi
+
+      save_session "$save_tool" "$save_model" "$resolved_url" "$model_loaded"
+    else
+      # Cloud profile - just save profile info
+      session_update "$work_dir" "$resolved_profile" "$resolved_url"
+    fi
   fi
 
   # ── STEP 5: Emit env block (stdout only, no blank lines) ───────────────────
