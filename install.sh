@@ -3,8 +3,9 @@
 #
 # WHAT THIS DOES:
 #   1. Installs claudeme-resolve binary to ~/.local/bin (no sudo needed)
-#   2. Adds claudeme shell function to ~/.zshrc
-#   3. Auto-installs dependencies: jq, litellm[proxy]
+#   2. Installs cleanup-advisor utility to ~/.local/bin
+#   3. Adds claudeme shell function to ~/.zshrc
+#   4. Auto-installs dependencies: jq, litellm[proxy]
 #
 # IDEMPOTENCY:
 #   Safe to run multiple times. It will:
@@ -20,9 +21,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"           # Source script in repo
-RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"    # Destination (user-writable, no sudo)
-ZSHRC="$HOME/.zshrc"                                  # Shell config file
+RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"                # Source script in repo
+RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"         # Destination (user-writable, no sudo)
+CLEANUP_SRC="$SCRIPT_DIR/scripts/cleanup-advisor"         # Standalone utility
+CLEANUP_DEST="$HOME/.local/bin/cleanup-advisor"           # Destination
+ZSHRC="$HOME/.zshrc"                                       # Shell config file
 
 # Markers to identify the claudeme block in .zshrc (for safe updates)
 MARKER_BEGIN="# ── claudeme ──────────────────────────────────────────────────────────────────"
@@ -148,10 +151,12 @@ else
   check "~/.local/bin exists"
 fi
 
-# 2. Copy resolver to ~/.local/bin
+# 2. Copy scripts to ~/.local/bin
 # IDEMPOTENCY: Only copy if missing or different (uses diff to check)
 echo ""
-msg "Installing claudeme-resolve..."
+msg "Installing scripts..."
+
+# claudeme-resolve
 if [[ -f "$RESOLVER_DEST" ]]; then
   # Check if it's different
   if ! diff -q "$RESOLVER_SRC" "$RESOLVER_DEST" &>/dev/null; then
@@ -165,6 +170,25 @@ else
   cp "$RESOLVER_SRC" "$RESOLVER_DEST"
   chmod +x "$RESOLVER_DEST"
   check "Installed claudeme-resolve"
+fi
+
+# cleanup-advisor (standalone utility)
+if [[ -f "$CLEANUP_SRC" ]]; then
+  if [[ -f "$CLEANUP_DEST" ]]; then
+    if ! diff -q "$CLEANUP_SRC" "$CLEANUP_DEST" &>/dev/null; then
+      cp "$CLEANUP_SRC" "$CLEANUP_DEST"
+      chmod +x "$CLEANUP_DEST"
+      check "Updated cleanup-advisor"
+    else
+      check "cleanup-advisor already up to date"
+    fi
+  else
+    cp "$CLEANUP_SRC" "$CLEANUP_DEST"
+    chmod +x "$CLEANUP_DEST"
+    check "Installed cleanup-advisor"
+  fi
+else
+  warn "cleanup-advisor source not found (skipping)"
 fi
 
 # 3. Check and install dependencies
@@ -286,6 +310,9 @@ echo "║   Installation complete!                        ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 msg "✅ claudeme installed and added to ~/.zshrc"
+if [[ -f "$CLEANUP_DEST" ]]; then
+  msg "✅ cleanup-advisor installed (system-wide utility)"
+fi
 echo ""
 msg "To use in THIS terminal (current session):"
 msg "  source ~/.zshrc"
@@ -297,6 +324,12 @@ echo ""
 msg "Optional — alias 'claude' to 'claudeme':"
 msg "  echo 'alias claude=claudeme' >> ~/.zshrc && source ~/.zshrc"
 echo ""
+if [[ -f "$CLEANUP_DEST" ]]; then
+  msg "Try the cleanup-advisor utility:"
+  msg "  cleanup-advisor --help"
+  msg "  cleanup-advisor         # See what's using RAM/CPU"
+  echo ""
+fi
 msg "Escape hatch to reach Anthropic directly (even with alias):"
 msg "  command claude"
 echo ""
