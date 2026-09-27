@@ -989,8 +989,8 @@ auto_start_litellm_if_needed() {
     return 1
   fi
 
-  # Strip quotes from model name
-  model=$(echo "$model" | sed 's/^"//;s/"$//')
+  # Strip quotes and ollama/ prefix (start_litellm adds it back)
+  model=$(echo "$model" | sed 's/^"//;s/"$//' | sed 's/^ollama\///')
   
   # Check memory
   if ! check_memory_and_cleanup "$model" ; then
