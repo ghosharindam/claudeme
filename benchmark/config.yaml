@@ -10,7 +10,7 @@ backends:
     # Direct connection (no intermediary)
     direct:
       enabled: true
-      url: http://localhost:8080
+      url: http://localhost:52123
       api_type: anthropic  # llama-server with --api-type anthropic
 
     # Via LiteLLM proxy
