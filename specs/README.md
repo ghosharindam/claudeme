@@ -1,12 +1,32 @@
 # Specification Documents
 
-Technical specifications and design documents for claudeme.
+Technical specifications and design documents for claudeme using OpenSpec format.
+
+## OpenSpec Format
+
+We use **OpenSpec** format for spec-driven development:
+- Machine-readable (YAML)
+- Validatable against schema
+- Tool-friendly (can generate docs, tests)
+- Human-readable
+
+### Spec Files
+
+Each feature has two files:
+1. **`feature-name.openspec.yaml`** - Machine-readable spec
+2. **`feature-name.md`** - Human-readable guide (optional)
+
+### Schema
+
+See [`.openspec-schema.yaml`](.openspec-schema.yaml) for the specification format.
+
+---
 
 ## Active Specifications
 
-### [auto-start-litellm.md](auto-start-litellm.md)
+### [auto-start-litellm.openspec.yaml](auto-start-litellm.openspec.yaml)
 **Status:** Draft  
-**Feature:** Auto-start LiteLLM with smart model selection
+**Version:** 0.1.0
 
 Intelligent auto-start system that:
 - Detects available tools and loaded models
@@ -15,120 +35,274 @@ Intelligent auto-start system that:
 - Integrates cleanup-advisor for memory management
 - 100% config-driven (no hardcoded values)
 
-**Key Files:**
-- `~/.claudeme/model-catalog.yaml` - Model metadata
-- `~/.claudeme/preferences.yaml` - User preferences
-- `~/.claudeme/sessions.json` - Session history
+**Key Components:**
+- `model-catalog.yaml` - Model metadata (RAM, quality, speed)
+- `preferences.yaml` - User preferences
+- `sessions.json` - Session history
+
+**Flows:**
+- Startup flow (detection → selection)
+- Session continuation (instant resume)
+- No coding models (smart recommendations)
 
 ---
 
-### [multi-model.md](multi-model.md)
+### [SPEC_MULTI_MODEL.md](SPEC_MULTI_MODEL.md)
 **Status:** Planned  
-**Feature:** Multi-model support via LiteLLM
+**Version:** N/A (Markdown only, convert to OpenSpec)
 
-Enable switching between multiple local models like `/model` in Claude Code.
+Multi-model support via LiteLLM for `/model` switching.
 
-**Approach:**
-- LiteLLM proxy with multi-model config
-- Auto-generate config from detected models
-- Trade-offs: flexibility vs. performance overhead
-
-**Decision:** Pending benchmark results
+**TODO:** Convert to OpenSpec format
 
 ---
 
-### [behavior.md](behavior.md)
+### [BEHAVIOR.md](BEHAVIOR.md)
 **Status:** Reference  
-**Feature:** Endpoint resolution behavior
+**Version:** N/A
 
-Documents how claudeme resolves endpoints:
-- Backend detection priority
-- Named profile handling
-- Model selection logic
-- Routing scenarios
+Documents endpoint resolution behavior.
 
 ---
 
-### [tech-spec.md](tech-spec.md)
-**Status:** Reference (Legacy)  
-**Feature:** Original technical specification
+### [TECH_SPEC.md](TECH_SPEC.md)
+**Status:** Legacy  
+**Version:** N/A
 
-Early design document. See newer specs for current features.
+Original technical specification (pre-OpenSpec).
 
 ---
 
 ## Implementation Status
 
-| Spec | Status | Phase |
-|------|--------|-------|
-| auto-start-litellm.md | Draft | Not started |
-| multi-model.md | Planned | Waiting on benchmarks |
-| behavior.md | Reference | - |
-| tech-spec.md | Legacy | - |
+| Spec | Format | Status | Phase |
+|------|--------|--------|-------|
+| auto-start-litellm | OpenSpec | Draft | Not started |
+| multi-model | Markdown | Planned | Waiting on benchmarks |
+| behavior | Markdown | Reference | - |
+| tech-spec | Markdown | Legacy | - |
 
 ---
 
-## Spec Template
+## OpenSpec Template
 
-When creating new specs, use this structure:
+### Minimal OpenSpec
 
-```markdown
-# SPEC: Feature Name
+```yaml
+openspec: 1.0.0
 
-**Status:** Draft/Active/Completed  
-**Author:** Name  
-**Created:** Date  
-**Related:** [other-spec.md](other-spec.md)
+info:
+  title: Feature Name
+  version: 0.1.0
+  status: draft
+  created: 2026-MM-DD
+  authors:
+    - Your Name
 
----
+summary: |
+  Brief description of what this feature does
 
-## Problem Statement
-What problem are we solving?
+problem:
+  current_state: What's the current situation?
+  issues:
+    - Issue 1
+    - Issue 2
+  goal: What do we want to achieve?
 
-## Goals
-What do we want to achieve?
+design_principles:
+  - principle: Config-driven
+    description: No hardcoded values
+  
+  - principle: User control
+    description: Everything configurable
 
-## Non-Goals
-What are we explicitly NOT doing?
+components:
+  configs:
+    - name: config-name
+      type: yaml
+      location: ~/.claudeme/config-name.yaml
+      purpose: What this config does
+      schema:
+        # Define structure
 
-## Design
-How will it work?
+flows:
+  - name: main-flow
+    description: What this flow does
+    steps:
+      - step: step-name
+        action: what happens
+        outputs:
+          - what is produced
 
-## Configuration
-What's configurable? (No hardcoded values!)
+success_criteria:
+  - criterion: Must work criterion
+    validation: How to verify
 
-## Implementation Plan
-Phases and tasks
-
-## Success Criteria
-How do we know it works?
-
-## Open Questions
-What needs decisions?
+implementation:
+  phases:
+    - phase: 1
+      name: Phase Name
+      tasks:
+        - Task 1
+        - Task 2
 ```
 
 ---
 
-## Directory Structure
+## Validation
 
+Validate specs against schema:
+
+```bash
+# Install yq for YAML validation
+brew install yq
+
+# Validate a spec
+yq eval-all '. as $spec | 
+  load(".openspec-schema.yaml") as $schema | 
+  $spec' auto-start-litellm.openspec.yaml
 ```
-specs/
-├── README.md                    # This file (index)
-├── auto-start-litellm.md        # Active spec
-├── multi-model.md               # Planned spec
-├── behavior.md                  # Reference
-└── tech-spec.md                 # Legacy
+
+---
+
+## Generating Documentation
+
+From OpenSpec, you can generate:
+- Markdown docs (human-readable)
+- Config file templates
+- Test cases
+- Implementation checklists
+
+**TODO:** Create generation tools
+
+---
+
+## Spec-Driven Development Workflow
+
+### 1. Write Spec First (OpenSpec)
+```bash
+# Create new spec
+cp auto-start-litellm.openspec.yaml my-feature.openspec.yaml
+
+# Edit with all details:
+# - Problem statement
+# - Design principles  
+# - Components (configs, commands)
+# - Flows (step-by-step)
+# - Success criteria
 ```
+
+### 2. Review & Validate
+```bash
+# Validate against schema
+# Get feedback from team
+# Ensure no hardcoded values
+```
+
+### 3. Create Config Templates
+```bash
+# From components.configs in spec
+# Create examples/*.yaml files
+```
+
+### 4. Implement Phase by Phase
+```bash
+# Follow implementation.phases in spec
+# Create tasks for each phase
+# Test after each phase
+```
+
+### 5. Update Spec as You Learn
+```bash
+# Document decisions in open_questions
+# Update flows if they change
+# Mark as "active" when implementing
+```
+
+### 6. Mark Complete
+```bash
+# Update status: completed
+# Add metrics achieved
+# Link to implementation
+```
+
+---
+
+## Benefits of OpenSpec
+
+✅ **Machine-readable** - Tools can parse and validate  
+✅ **Structured** - Consistent format across features  
+✅ **Validatable** - Schema ensures completeness  
+✅ **Config-driven** - Enforces no hardcoding  
+✅ **Flow-based** - Step-by-step clarity  
+✅ **Measurable** - Clear success criteria  
+✅ **Traceable** - Links specs to implementation  
 
 ---
 
 ## Contributing
 
-When adding a new feature:
-1. Write a spec first (use template above)
-2. Get feedback/review
-3. Implement in phases
-4. Update spec with decisions made
-5. Mark as "Completed" when shipped
+### New Features
 
-**No implementation without spec for major features!**
+1. **Start with OpenSpec** - Not code!
+2. **Define all configs** - No hardcoded values
+3. **Document flows** - Step-by-step behavior
+4. **Set success criteria** - How to verify
+5. **Get review** - Before implementing
+6. **Implement in phases** - Track progress
+7. **Update spec** - Document decisions
+
+### Converting Existing Specs
+
+To convert Markdown specs to OpenSpec:
+
+1. Create `feature-name.openspec.yaml`
+2. Extract components, flows, configs
+3. Define schema for each config
+4. Document decision trees as flows
+5. Add success criteria
+6. Keep Markdown for additional context
+
+---
+
+## Examples
+
+### Good OpenSpec
+```yaml
+components:
+  configs:
+    - name: model-catalog
+      type: yaml
+      location: ~/.claudeme/model-catalog.yaml
+      schema:
+        coding_models:
+          qwen2.5-coder:
+            versions:
+              "7b":
+                ram_gb: 4.3    # FROM CONFIG, not hardcoded!
+```
+
+### Bad (Hardcoded)
+```yaml
+# DON'T DO THIS
+flows:
+  - step: recommend_model
+    model: "qwen2.5-coder:7b"   # ❌ Hardcoded!
+    ram: 4.3                    # ❌ Hardcoded!
+```
+
+### Good (Config-Driven)
+```yaml
+# DO THIS
+flows:
+  - step: recommend_model
+    reads: model-catalog.yaml
+    path: coding_models.qwen2.5-coder.versions.7b
+    extracts:
+      - ram_gb
+      - quality_score
+```
+
+---
+
+**Policy:** All new features require OpenSpec before implementation!

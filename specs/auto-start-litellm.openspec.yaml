@@ -1,0 +1,486 @@
+openspec: 1.0.0
+
+info:
+  title: Auto-Start LiteLLM with Smart Model Selection
+  version: 0.1.0
+  status: draft
+  created: 2026-09-27
+  authors:
+    - User
+    - Claude
+  related:
+    - multi-model.openspec.yaml
+
+summary: |
+  Intelligent auto-start system for LiteLLM that detects available tools and models,
+  recommends based on available memory, prefers already-loaded models, and integrates
+  cleanup-advisor for memory management. 100% config-driven with no hardcoded values.
+
+problem:
+  current_state: |
+    User sees error: "Ollama detected but LiteLLM proxy on :4000 is not running"
+    Must manually start LiteLLM with correct model
+
+  issues:
+    - Manual LiteLLM startup required
+    - User must know which model to specify
+    - No awareness of loaded models (memory waste)
+    - No memory checks before loading
+    - Wrong models (vision, embedding) might be selected
+
+  goal: |
+    Intelligent, memory-aware auto-start with preference for already-loaded models
+
+design_principles:
+  - principle: Config-driven
+    description: All preferences, models, thresholds in config files
+
+  - principle: Memory-aware
+    description: Check resources before loading
+
+  - principle: Smart defaults
+    description: Prefer loaded models, coding models
+
+  - principle: Session continuity
+    description: Remember last-used setup
+
+  - principle: User control
+    description: Can disable, override, configure
+
+  - principle: No hardcoded values
+    description: Everything configurable
+
+  - principle: No assumptions
+    description: Check actual system state
+
+  - principle: No silent failures
+    description: Clear feedback always
+
+components:
+  configs:
+    - name: model-catalog
+      type: yaml
+      location: ~/.claudeme/model-catalog.yaml
+      purpose: Model metadata (RAM, quality, speed, thresholds)
+      schema:
+        version: string
+        coding_models:
+          type: object
+          properties:
+            name: string
+            description: string
+            recommended: boolean
+            versions:
+              type: object
+              properties:
+                ram_gb: number
+                quality_score: integer (1-10)
+                speed_score: integer (1-10)
+                recommended_for: string
+        memory_thresholds:
+          type: object
+          properties:
+            high:
+              min_available_gb: number
+              recommended_model_size: string
+            medium:
+              min_available_gb: number
+              recommended_model_size: string
+        excluded_patterns:
+          type: array
+          items: string
+
+    - name: preferences
+      type: yaml
+      location: ~/.claudeme/preferences.yaml
+      purpose: User-specific settings and choices
+      schema:
+        auto_start:
+          enabled: boolean
+          remember_choice: boolean
+          last_decision: string (yes/no/null)
+        preferred_models:
+          type: array
+          items: string
+        memory:
+          check_before_load: boolean
+          auto_cleanup: string (yes/no/ask)
+
+    - name: sessions
+      type: json
+      location: ~/.claudeme/sessions.json
+      purpose: Session history per directory
+      schema:
+        type: object
+        properties:
+          directory_path:
+            tool: string
+            model: string
+            endpoint: string
+            last_used: datetime
+            model_was_loaded: boolean
+
+  commands:
+    - name: claudeme
+      description: Main endpoint resolver
+      args:
+        - name: profile
+          type: string
+          optional: true
+          description: Named profile or model selection
+
+        - name: -c
+          type: flag
+          description: Continue previous session
+
+    - name: claudeme config
+      description: Manage configuration
+      subcommands:
+        - name: show
+          description: Display current config
+
+        - name: set
+          args:
+            - name: key
+              type: string
+            - name: value
+              type: string
+
+        - name: models
+          description: Show model preferences
+
+        - name: reset
+          description: Reset to defaults
+
+    - name: claudeme update-catalog
+      description: Update model catalog from remote
+
+  detectors:
+    - name: tool_detector
+      detects:
+        - llama-server (running status, loaded model, RAM usage)
+        - Ollama (running status, loaded models via 'ollama ps')
+        - LiteLLM (running status on port 4000)
+
+    - name: memory_detector
+      detects:
+        - Total system RAM
+        - Available RAM
+        - Used RAM percentage
+        - Swap usage
+
+    - name: model_detector
+      detects:
+        - Loaded models and their RAM usage
+        - Available models (not loaded)
+        - Model sizes from catalog
+
+flows:
+  - name: startup
+    description: Main claudeme invocation flow
+    steps:
+      - step: load_configs
+        reads:
+          - ~/.claudeme/model-catalog.yaml
+          - ~/.claudeme/preferences.yaml
+          - ~/.claudeme/sessions.json
+        creates_if_missing: true
+
+      - step: detect_system_state
+        detects:
+          - Running tools
+          - Loaded models
+          - Available memory
+        outputs:
+          - system_state
+
+      - step: check_continuation
+        condition: -c flag present
+        action: read_session_history
+        branches:
+          - if: session exists and tool running and model loaded
+            then: resume_instantly
+          - if: session exists but model not loaded
+            then: check_memory_and_load
+          - else: goto interactive_selection
+
+      - step: interactive_selection
+        displays:
+          - Loaded models (highlighted)
+          - Available coding models
+          - Memory status
+          - Recommendations from catalog
+        allows:
+          - User selection
+          - Memory check before loading
+
+      - step: execute_selection
+        validates:
+          - Memory sufficient
+          - Model compatible
+        actions:
+          - Load model if needed
+          - Start LiteLLM if needed
+          - Save to session history
+
+  - name: no_coding_models
+    description: No coding models installed flow
+    steps:
+      - step: check_memory
+        gets: available_memory_gb
+
+      - step: get_memory_tier
+        input: available_memory_gb
+        reads: memory_thresholds from catalog
+        output: tier (high/medium/low/very_low)
+
+      - step: load_recommendations
+        input: tier
+        reads: coding_models from catalog
+        filters:
+          - by memory tier allowed sizes
+          - by quality score
+          - by user preferences
+        output: top 3 recommendations
+
+      - step: present_recommendations
+        displays:
+          - Model name
+          - RAM requirement (from catalog)
+          - Quality/Speed scores (from catalog)
+          - Recommended for (from catalog)
+
+      - step: user_selection
+        allows: select from recommendations
+
+      - step: check_and_install
+        validates: memory sufficient
+        actions:
+          - if insufficient: suggest cleanup
+          - if sufficient: install via ollama pull
+          - load into memory
+          - use model
+
+  - name: session_continuation
+    description: Auto-resume with -c flag
+    preconditions:
+      - -c flag present
+      - Session history exists for current directory
+
+    steps:
+      - step: read_history
+        reads: ~/.claudeme/sessions.json
+        extracts:
+          - tool
+          - model
+          - endpoint
+          - model_was_loaded
+
+      - step: verify_tool
+        checks: tool still running
+        action:
+          - if yes: proceed
+          - if no: start tool
+
+      - step: verify_model
+        checks: model still loaded
+        action:
+          - if yes: resume instantly
+          - if no: check memory and load
+
+      - step: resume
+        sets: endpoint
+        continues: to claude session
+
+memory_integration:
+  check_before_load:
+    when: User selects unloaded model
+    steps:
+      - get_model_ram_requirement:
+          source: model-catalog.yaml
+
+      - get_available_memory:
+          source: system
+
+      - calculate_fit:
+          formula: available_gb >= (model_ram_gb + min_free_after_load_gb)
+          min_free_after_load_gb:
+            source: model-catalog.yaml
+            path: safety.min_free_after_load_gb
+
+      - if_insufficient:
+          action: run cleanup-advisor
+          prompts: user to kill processes
+          rechecks: memory after cleanup
+
+  cleanup_integration:
+    uses: utils/cleanup-advisor/cleanup-advisor
+    shows:
+      - RAM consumers by application
+      - Processes to kill
+      - Potential RAM freed
+    integration:
+      - Called when memory insufficient
+      - Shows what's using RAM
+      - Suggests what to kill
+      - Rechecks after cleanup
+
+decision_trees:
+  startup:
+    root: claudeme invoked
+    branches:
+      - is_continuation:
+          condition: -c flag
+          yes: session_continuation flow
+          no: check_available_tools
+
+      - check_available_tools:
+          detects:
+            - llama-server
+            - Ollama
+            - LiteLLM
+          next: check_loaded_models
+
+      - check_loaded_models:
+          detects: models in memory
+          next: check_memory
+
+      - check_memory:
+          gets: available_gb
+          next: interactive_selection
+
+success_criteria:
+  - criterion: Zero hardcoded values
+    validation: All in configs
+
+  - criterion: Memory-aware
+    validation: Checks before loading, never OOM
+
+  - criterion: Prefers loaded
+    validation: Instant when already in RAM
+
+  - criterion: Smart recommendations
+    validation: Based on system capabilities
+
+  - criterion: User control
+    validation: Can configure all behavior
+
+  - criterion: Session continuity
+    validation: Remembers last setup
+
+  - criterion: Cleanup integration
+    validation: Helps free memory when needed
+
+metrics:
+  performance:
+    - metric: Time to start with loaded model
+      target: "<5 seconds"
+
+    - metric: Time to start with new model
+      target: "<30 seconds"
+
+    - metric: Memory accuracy
+      target: "100% (never OOM)"
+
+  user_satisfaction:
+    - metric: Users preferring auto-start
+      target: ">95%"
+
+    - metric: Correct model selected
+      target: ">90%"
+
+implementation:
+  phases:
+    - phase: 1
+      name: Config Infrastructure
+      tasks:
+        - Create examples/model-catalog.yaml
+        - Create examples/preferences.yaml
+        - Update install.sh to copy configs
+        - Add config loading to claudeme-resolve
+
+    - phase: 2
+      name: Detection
+      tasks:
+        - Implement tool/model detection
+        - Implement memory detection
+        - Implement loaded model detection
+
+    - phase: 3
+      name: Smart Selection
+      tasks:
+        - Implement memory tier logic (from config)
+        - Implement model recommendations (from catalog)
+        - Implement selection UI
+
+    - phase: 4
+      name: Auto-Start
+      tasks:
+        - Implement LiteLLM auto-start
+        - Implement memory checks
+        - Integrate cleanup-advisor
+
+    - phase: 5
+      name: Session Management
+      tasks:
+        - Implement session history
+        - Implement auto-resume
+        - Test continuity
+
+files:
+  created:
+    - path: examples/model-catalog.yaml
+      purpose: Default model catalog (bundled)
+
+    - path: examples/preferences.yaml
+      purpose: Default preferences template
+
+    - path: ~/.claudeme/model-catalog.yaml
+      purpose: User's model catalog (installed)
+
+    - path: ~/.claudeme/preferences.yaml
+      purpose: User's preferences (installed)
+
+    - path: ~/.claudeme/sessions.json
+      purpose: Session history (auto-managed)
+
+  modified:
+    - path: bin/claudeme-resolve
+      changes:
+        - Add config loading
+        - Add detection logic
+        - Add recommendation logic
+        - Add auto-start logic
+
+    - path: install.sh
+      changes:
+        - Install default configs
+        - Create ~/.claudeme/ directory
+
+open_questions:
+  - question: Catalog update frequency?
+    options:
+      - Manual: User runs 'claudeme update-catalog'
+      - Auto: Check weekly or on install
+    decision: TBD
+
+  - question: Model size detection?
+    options:
+      - Trust catalog (faster, curated)
+      - Verify with 'ollama show' (slower, accurate)
+    decision: TBD
+
+  - question: Background LiteLLM lifecycle?
+    options:
+      - Keep running (faster next time)
+      - Stop on exit (cleaner)
+    decision: TBD
+
+related_specs:
+  - name: multi-model
+    file: multi-model.openspec.yaml
+    relationship: This spec enables multi-model when ready
+
+  - name: behavior
+    file: behavior.md
+    relationship: Documents endpoint resolution behavior

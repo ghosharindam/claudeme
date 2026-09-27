@@ -1,0 +1,221 @@
+# OpenSpec Schema for claudeme specifications
+# Defines the structure for .openspec.yaml files
+
+$schema: "http://json-schema.org/draft-07/schema#"
+title: Claudeme OpenSpec
+version: 1.0.0
+
+description: |
+  Schema for claudeme feature specifications.
+  Based on OpenSpec principles for spec-driven development.
+
+type: object
+required:
+  - openspec
+  - info
+  - summary
+
+properties:
+  openspec:
+    type: string
+    pattern: "^\\d+\\.\\d+\\.\\d+$"
+    description: "OpenSpec version (semantic versioning)"
+
+  info:
+    type: object
+    required:
+      - title
+      - version
+      - status
+    properties:
+      title:
+        type: string
+        description: "Feature name"
+
+      version:
+        type: string
+        pattern: "^\\d+\\.\\d+\\.\\d+$"
+        description: "Spec version"
+
+      status:
+        type: string
+        enum:
+          - draft
+          - active
+          - completed
+          - deprecated
+        description: "Implementation status"
+
+      created:
+        type: string
+        format: date
+
+      authors:
+        type: array
+        items:
+          type: string
+
+      related:
+        type: array
+        items:
+          type: string
+        description: "Related spec files"
+
+  summary:
+    type: string
+    description: "Brief feature description"
+
+  problem:
+    type: object
+    properties:
+      current_state:
+        type: string
+      issues:
+        type: array
+        items:
+          type: string
+      goal:
+        type: string
+
+  design_principles:
+    type: array
+    items:
+      type: object
+      required:
+        - principle
+        - description
+      properties:
+        principle:
+          type: string
+        description:
+          type: string
+
+  components:
+    type: object
+    properties:
+      configs:
+        type: array
+        items:
+          type: object
+          required:
+            - name
+            - type
+            - location
+          properties:
+            name:
+              type: string
+            type:
+              enum:
+                - yaml
+                - json
+                - toml
+            location:
+              type: string
+            purpose:
+              type: string
+            schema:
+              type: object
+
+      commands:
+        type: array
+        items:
+          type: object
+          properties:
+            name:
+              type: string
+            description:
+              type: string
+            args:
+              type: array
+            subcommands:
+              type: array
+
+  flows:
+    type: array
+    items:
+      type: object
+      required:
+        - name
+        - steps
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        preconditions:
+          type: array
+        steps:
+          type: array
+          items:
+            type: object
+
+  success_criteria:
+    type: array
+    items:
+      type: object
+      required:
+        - criterion
+        - validation
+      properties:
+        criterion:
+          type: string
+        validation:
+          type: string
+
+  metrics:
+    type: object
+    properties:
+      performance:
+        type: array
+      user_satisfaction:
+        type: array
+
+  implementation:
+    type: object
+    properties:
+      phases:
+        type: array
+        items:
+          type: object
+          required:
+            - phase
+            - name
+            - tasks
+          properties:
+            phase:
+              type: integer
+            name:
+              type: string
+            tasks:
+              type: array
+              items:
+                type: string
+
+  open_questions:
+    type: array
+    items:
+      type: object
+      required:
+        - question
+        - options
+      properties:
+        question:
+          type: string
+        options:
+          type: array
+        decision:
+          type: string
+
+# Validation rules
+validation:
+  - rule: No hardcoded values
+    check: All model names, thresholds in components.configs
+
+  - rule: Config-driven
+    check: All defaults referenced from config files
+
+  - rule: Clear flows
+    check: All flows have steps with clear actions
+
+  - rule: Measurable success
+    check: Success criteria are testable
