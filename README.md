@@ -117,36 +117,18 @@ Yes! All scripts are **copied** to `~/.local/bin/claudeme/`, so they work even a
 
 ### Uninstalling
 
-**Complete uninstall:**
 ```bash
-# 1. Remove installed binaries
-rm -rf ~/.local/bin/claudeme/
-
-# 2. Remove shell function from ~/.zshrc
-# Open ~/.zshrc and delete the claudeme block between these markers:
-#   # ── claudeme ──────────────────────────────────────────────────────────────────
-#   # ── end claudeme ──────────────────────────────────────────────────────────────
-
-# 3. (Optional) Remove config and session data
-rm -rf ~/.claudeme/
-
-# 4. Reload shell
-source ~/.zshrc
-```
-
-**Keep config, remove only binaries:**
-```bash
-# Just remove installed scripts (keeps profiles and session history)
-rm -rf ~/.local/bin/claudeme/
-
-# Remove shell function from ~/.zshrc (see above)
-source ~/.zshrc
+./utils/uninstall.sh              # Interactive (asks about config)
+./utils/uninstall.sh --all        # Remove everything including config
+./utils/uninstall.sh --keep-config # Keep profiles and session history
 ```
 
 **What gets removed:**
-- `~/.local/bin/claudeme/` — Installed binaries (claudeme-resolve, cleanup-advisor, benchmark-run)
-- `~/.zshrc` — claudeme shell function block
-- `~/.claudeme/` — Config files (profiles.json, sessions.json) - optional
+- `~/.local/bin/claudeme/` — Installed binaries
+- `~/.zshrc` — Shell function
+- `~/.claudeme/` — Config (optional)
+
+To reinstall: `./install.sh`
 
 ---
 
