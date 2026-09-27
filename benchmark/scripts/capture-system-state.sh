@@ -188,7 +188,7 @@ print_recommendations() {
   echo "# Warmup: Run 2-3 requests before timing to warm caches"
   echo "#"
   echo "# To free up resources before benchmarking:"
-  echo "#   ./benchmark/scripts/suggest-cleanup.sh"
+  echo "#   cleanup-advisor  (or ./scripts/cleanup-advisor)"
   echo "#"
 }
 

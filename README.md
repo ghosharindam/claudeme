@@ -99,6 +99,42 @@ Run `./install.sh` again at any time — it's fully idempotent:
 
 ---
 
+## Standalone Utilities
+
+### cleanup-advisor - System Resource Cleanup
+
+Find processes hogging RAM/CPU before resource-intensive tasks:
+
+```bash
+# See what's using resources (shows aggregated multi-process apps!)
+./scripts/cleanup-advisor
+
+# Install system-wide
+ln -s $(pwd)/scripts/cleanup-advisor ~/.local/bin/
+cleanup-advisor --help
+```
+
+**Use cases:**
+- Before benchmarking (get accurate results)
+- Before compiling large projects (faster builds)
+- Before video editing (ensure enough RAM)
+- System feels slow (diagnose what's eating resources)
+
+**Example output:**
+```
+Application RAM Totals (multiple processes grouped):
+
+- Visual Studio Code   10 procs  5120MB (5.0GB)  ← Catches hidden hogs!
+  Kill: code --stop  or  pkill -x 'Code'
+  
+- Google Chrome        15 procs  3200MB (3.1GB)
+  Kill: pkill -x 'Google Chrome'
+```
+
+See [`scripts/README.md`](scripts/README.md) for full documentation.
+
+---
+
 ## Usage
 
 ### Local model (auto-detected)
