@@ -174,15 +174,83 @@ Start any local model server, then just run:
 
 ```bash
 claudeme
-claudeme -c       # continue last session
+claudeme -c       # continue last session (smart resume!)
 ```
 
 Supported backends: **llama.cpp** (`:8080`), **LiteLLM proxy** (`:4000`), **Ollama** (`:11434`), **Edge Gallery** (`:1234`).
 
-Ollama and Edge Gallery need a LiteLLM proxy running on `:4000` to translate to Anthropic format:
-```bash
-litellm --model ollama/llama3.2 --port 4000
+#### Automatic LiteLLM startup
+
+If Ollama is running but LiteLLM proxy isn't, `claudeme` will offer to start it automatically:
+
 ```
+$ claudeme
+
+→ Ollama detected on :11434
+  Available models: qwen2.5-coder:7b (4.3GB)
+
+→ LiteLLM proxy not running on :4000
+  Start LiteLLM with qwen2.5-coder:7b? [Y/n/never]: y
+
+→ Starting LiteLLM proxy...
+✅ LiteLLM proxy started on :4000
+```
+
+**How it works:**
+- ✅ Detects Ollama running without LiteLLM
+- ✅ Recommends best coding model for your available RAM
+- ✅ Checks memory before starting (prevents OOM)
+- ✅ Remembers your choice (won't ask again if you said "never")
+- ✅ Starts LiteLLM in background
+- ✅ Waits for port to be ready before connecting
+
+**Manual start** (if you prefer):
+```bash
+# Start with default model
+litellm --model ollama/qwen2.5-coder:7b --port 4000
+
+# Or use any model you have loaded
+litellm --model ollama/deepseek-coder:6.7b --port 4000
+```
+
+#### Smart session resume
+
+`claudeme -c` now does **instant resume** if your model is still loaded in memory:
+
+```
+$ claudeme -c
+
+→ Resuming previous session
+  Tool: ollama
+  Model: qwen2.5-coder:7b
+
+✓ ollama running
+✓ Model already loaded in memory
+→ Resuming instantly (no overhead)
+
+(Claude Code connects immediately)
+```
+
+If the model was unloaded, it automatically reloads it:
+
+```
+→ Resuming previous session
+  Tool: ollama
+  Model: qwen2.5-coder:7b
+
+✓ ollama running
+⚠️  Model not loaded anymore
+
+→ Loading qwen2.5-coder:7b into memory...
+✅ Ready
+```
+
+**Benefits:**
+- 🚀 Instant return to your project (no waiting if model still loaded)
+- 🧠 Smart model selection based on available RAM
+- 💾 Remembers which model you were using per directory
+- 🔄 Automatic reload if model was unloaded
+- 🛡️ Memory checks before loading (prevents OOM)
 
 ### Endpoint selection menu
 
@@ -203,8 +271,14 @@ If only one endpoint is available it is selected automatically — no prompt.
 
 ### Continuing a previous session
 
-`claudeme -c` continues the last session **and** reuses the last endpoint automatically — no need to name it again:
+`claudeme -c` continues the last session and reuses the last endpoint — no need to name it again.
 
+**For local sessions** (Ollama/llama-server):
+- Detects if your previous model is still loaded in memory
+- **Resumes instantly** if loaded (0 overhead)
+- **Auto-reloads** if needed (with memory checks)
+
+**For cloud profiles** (GCP, AWS, etc.):
 ```
 $ claudeme -c
 → Continuing on gcp (https://my-litellm.run.app)
@@ -330,6 +404,77 @@ claudeme models <name> list                            # same as claudeme <name>
 
 ---
 
+## Configuration
+
+All settings are stored in `~/.claudeme/` with sensible defaults — **zero configuration needed** to get started.
+
+### Auto-start preferences
+
+Control when and how LiteLLM auto-starts:
+
+```bash
+# View/edit preferences
+cat ~/.claudeme/preferences.yaml
+
+# Key settings:
+auto_start:
+  enabled: true                      # Enable auto-start
+  remember_choice: true              # Remember yes/no decision
+  last_decision: null                # "yes", "no", or "never"
+
+preferred_models:
+  - qwen2.5-coder:7b                # First choice (balanced quality/speed)
+  - deepseek-coder-v2:6.7b          # Second choice (good alternative)
+  - qwen2.5-coder:3b                # Fallback (low memory)
+
+litellm:
+  port: 4000                         # Port to run LiteLLM on
+  host: "0.0.0.0"                    # Listen address
+  keep_running: true                 # Keep proxy running after exit
+```
+
+### Model catalog
+
+Available coding models and their memory requirements:
+
+```bash
+cat ~/.claudeme/model-catalog.yaml
+```
+
+Contains:
+- **Model versions** with RAM requirements
+- **Quality/speed scores** for each version
+- **Memory thresholds** (high/medium/low/very_low)
+- **Safety margins** (min free RAM, max usage %)
+
+**How it's used:**
+- Auto-start recommends the best model for your available RAM
+- Won't start a model if insufficient memory
+- Falls back to smaller models on low-memory systems
+
+### Session history
+
+Tracks which tool and model you were using per directory:
+
+```bash
+cat ~/.claudeme/sessions.json
+
+# Output:
+{
+  "/path/to/project": {
+    "tool": "ollama",
+    "model": "qwen2.5-coder:7b",
+    "endpoint": "http://localhost:4000",
+    "model_was_loaded": true,
+    "last_used": "2026-09-27T11:30:00Z"
+  }
+}
+```
+
+This enables instant resume when you return to a project.
+
+---
+
 ## Shared with `claude`
 
 `claudeme` is a wrapper around `claude` — it sets the endpoint and execs the real Claude Code binary. This means everything is shared:
@@ -361,24 +506,41 @@ Then `claudeme` and `claudeme -c` in that project automatically use the `gcp` pr
 
 ## All commands
 
+### Main commands
+
 | Command | What it does |
 |---|---|
-| `claudeme` | Fresh session; auto-select if one endpoint, menu if multiple |
-| `claudeme -c` | Continue last session on last used endpoint (prints which) |
+| `claudeme` | Fresh session; auto-select if one endpoint, menu if multiple; auto-starts LiteLLM if needed |
+| `claudeme -c` | Continue last session on last used endpoint; **smart resume** (instant if model loaded) |
 | `claudeme gcp` | Fresh session, gcp profile, profile's default model |
 | `claudeme gcp -c` | Continue last session, gcp profile |
 | `claudeme gcp:g25pro` | Fresh session, gcp profile, alias resolved to full model name |
 | `claudeme gcp:g25pro -c` | Continue last session, gcp profile, specific model |
 | `claudeme local` | Fresh session, force local auto-detect |
 | `claudeme local -c` | Continue last session, force local |
+
+### Isolated sessions
+
+| Command | What it does |
+|---|---|
 | `claudeme --isolated` | Fresh isolated session, auto-detect local |
 | `claudeme --isolated -c` | Continue isolated session, last used endpoint |
 | `claudeme --isolated gcp` | Fresh isolated session, gcp profile |
 | `claudeme --isolated gcp -c` | Continue isolated session, gcp profile |
+
+### Profile management
+
+| Command | What it does |
+|---|---|
 | `claudeme add <name> <url>` | Add a named profile |
 | `claudeme remove <name>` | Remove a profile |
 | `claudeme list` | List all endpoints: live local backends + named profiles |
 | `claudeme test <name>` | Test a profile end-to-end |
+
+### Model aliases
+
+| Command | What it does |
+|---|---|
 | `claudeme <name> list` | List models on that profile's endpoint, with aliases |
 | `claudeme models <name> add <alias> <model>` | Register a model alias |
 | `claudeme models <name> remove <alias>` | Remove a model alias |
