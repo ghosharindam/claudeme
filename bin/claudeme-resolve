@@ -1510,7 +1510,7 @@ cmd_resolve() {
   if [[ "$profile_name" == "local" ]]; then
     env_block=$(cmd_resolve_local_forced)
     resolved_profile=""
-    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+    resolved_url=$(echo "$env_block" | grep '^export ANTHROPIC_BASE_URL=' | cut -d= -f2-)
 
   elif [[ -n "$profile_name" ]]; then
     local profile_json; profile_json=$(profile_get "$profile_name") || {
@@ -1551,7 +1551,7 @@ cmd_resolve() {
       else
         msg "→ No previous session - auto-detecting"
         env_block=$(cmd_resolve_auto)
-        resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+        resolved_url=$(echo "$env_block" | grep '^export ANTHROPIC_BASE_URL=' | cut -d= -f2-)
         resolved_profile=""
       fi
     fi
@@ -1572,7 +1572,7 @@ cmd_resolve() {
 
   else
     env_block=$(cmd_resolve_auto)
-    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+    resolved_url=$(echo "$env_block" | grep '^export ANTHROPIC_BASE_URL=' | cut -d= -f2-)
     resolved_profile=""
   fi
 
