@@ -1003,3 +1003,209 @@ select_best_model() {
   return 1  # No suitable model found
 }
 
+
+# ── Phase 4: Auto-Start LiteLLM ───────────────────────────────────────────────
+
+# Check if LiteLLM should be auto-started
+should_auto_start_litellm() {
+  # Check if auto-start is enabled in preferences
+  local enabled=$(get_config "$PREFERENCES" ".auto_start.enabled")
+  
+  if [[ "$enabled" != "true" ]]; then
+    return 1  # Auto-start disabled
+  fi
+  
+  # Check if Ollama is running but LiteLLM is not
+  local tools=$(detect_tools)
+  
+  if [[ "$tools" == *"ollama"* ]] && [[ "$tools" != *"litellm"* ]]; then
+    return 0  # Should auto-start
+  fi
+  
+  return 1  # Not needed
+}
+
+# Get user's last auto-start decision
+get_auto_start_decision() {
+  local decision=$(get_config "$PREFERENCES" ".auto_start.last_decision")
+  echo "${decision:-null}"
+}
+
+# Save user's auto-start decision
+save_auto_start_decision() {
+  local decision=$1
+  
+  # Use yq to update the YAML in place
+  yq eval ".auto_start.last_decision = \"$decision\"" -i "$PREFERENCES" 2>/dev/null || true
+}
+
+# Prompt user to start LiteLLM
+prompt_auto_start() {
+  local model=$1
+  local available_gb=$2
+  
+  msg "→ Ollama detected on :11434"
+  msg "  Model recommendation: $model"
+  msg ""
+  msg "→ LiteLLM proxy not running on :4000"
+  msg "  Start LiteLLM with $model? [Y/n/never]: "
+  
+  read -r response
+  
+  case "$response" in
+    [Nn]*)
+      echo "no"
+      ;;
+    [Nn]ever)
+      echo "never"
+      save_auto_start_decision "no"
+      ;;
+    *)
+      echo "yes"
+      ;;
+  esac
+}
+
+# Start LiteLLM in background
+start_litellm() {
+  local model=$1
+  
+  # Get LiteLLM settings from config
+  local port=$(get_config "$PREFERENCES" ".litellm.port")
+  local host=$(get_config "$PREFERENCES" ".litellm.host")
+  local extra_args=$(get_config "$PREFERENCES" ".litellm.extra_args[]")
+  
+  port=${port:-4000}
+  host=${host:-0.0.0.0}
+  
+  msg "→ Starting LiteLLM proxy..."
+  msg "  litellm --model ollama/$model --port $port --host $host"
+  
+  # Start in background
+  nohup litellm --model "ollama/$model" --port "$port" --host "$host" $extra_args \
+    > /tmp/litellm.log 2>&1 &
+  
+  local litellm_pid=$!
+  
+  # Wait for LiteLLM to be ready
+  local timeout=$(get_config "$MODEL_CATALOG" ".litellm.startup_timeout_sec")
+  timeout=${timeout:-5}
+  
+  msg "  Waiting for LiteLLM to be ready..."
+  
+  for i in $(seq 1 $timeout); do
+    if lsof -i ":$port" >/dev/null 2>&1; then
+      msg "✅ LiteLLM proxy started on :$port"
+      return 0
+    fi
+    sleep 1
+  done
+  
+  msg "⚠️  LiteLLM may still be starting (check /tmp/litellm.log)"
+  return 0
+}
+
+# Check memory and offer cleanup if needed
+check_memory_and_cleanup() {
+  local model=$1
+  local available_gb=$(get_available_memory_gb)
+  
+  # Check if model fits
+  if check_model_fits "$model" "$available_gb"; then
+    return 0  # Fits, no cleanup needed
+  fi
+  
+  # Model doesn't fit - offer cleanup
+  local model_ram=$(get_model_ram "$model")
+  local min_free=$(get_config "$MODEL_CATALOG" ".safety.min_free_after_load_gb")
+  min_free=${min_free:-2}
+  
+  local needed=$(echo "$model_ram + $min_free" | bc)
+  local shortfall=$(echo "$needed - $available_gb" | bc)
+  
+  msg ""
+  msg "⚠️  Insufficient memory!"
+  msg "  Available:  ${available_gb}GB"
+  msg "  Needed:     ${needed}GB (${model_ram}GB model + ${min_free}GB safety)"
+  msg "  Shortfall:  ${shortfall}GB"
+  msg ""
+  msg "Free up memory first:"
+  msg "  cleanup-advisor"
+  msg ""
+  msg "Or use smaller model:"
+  msg "  • qwen2.5-coder:3b (2.1GB)"
+  msg "  • qwen2.5-coder:1.5b (1.2GB)"
+  msg ""
+  
+  return 1  # Doesn't fit
+}
+
+# Main auto-start flow
+auto_start_litellm_if_needed() {
+  # Check if we should auto-start
+  if ! should_auto_start_litellm; then
+    return 1  # Not needed or disabled
+  fi
+  
+  # Check user's previous decision
+  local last_decision=$(get_auto_start_decision)
+  
+  if [[ "$last_decision" == "no" ]]; then
+    msg "→ Ollama detected but LiteLLM not running"
+    msg "  (Auto-start disabled by preference)"
+    msg ""
+    msg "  Start manually:"
+    msg "    litellm --model ollama/qwen2.5-coder:7b --port 4000"
+    msg ""
+    return 1
+  fi
+  
+  # Get recommended model
+  local available_gb=$(get_available_memory_gb)
+  local model=$(select_best_model)
+  
+  if [[ -z "$model" ]]; then
+    msg "→ No suitable coding models found"
+    msg "  Install one:"
+    msg "    ollama pull qwen2.5-coder:7b"
+    msg ""
+    return 1
+  fi
+  
+  # Check memory
+  if ! check_memory_and_cleanup "$model" ; then
+    return 1  # Insufficient memory
+  fi
+  
+  # Prompt user (unless remembered "yes")
+  local response="yes"
+  if [[ "$last_decision" != "yes" ]]; then
+    response=$(prompt_auto_start "$model" "$available_gb")
+  fi
+  
+  case "$response" in
+    yes)
+      # Remember if user wants
+      if [[ "$last_decision" == "null" ]]; then
+        msg "Remember this choice? [Y/n]: "
+        read -r remember
+        if [[ ! "$remember" =~ ^[Nn] ]]; then
+          save_auto_start_decision "yes"
+          msg "✅ Saved preference (won't ask again)"
+        fi
+      fi
+      
+      # Start LiteLLM
+      start_litellm "$model"
+      return 0
+      ;;
+    
+    never|no)
+      msg "❌ Cancelled"
+      return 1
+      ;;
+  esac
+  
+  return 1
+}
+
