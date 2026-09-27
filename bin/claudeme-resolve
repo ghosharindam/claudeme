@@ -976,17 +976,21 @@ auto_start_litellm_if_needed() {
     return 1
   fi
   
-  # Get recommended model
-  local available_gb=$(get_available_memory_gb)
-  local model=$(select_best_model)
-  
+  # Get model from INSTALLED models (not catalog)
+  msg "→ Detecting installed models..."
+  local model
+  model=$(select_model_interactive "http://localhost:4000")
+
   if [[ -z "$model" ]]; then
-    msg "→ No suitable coding models found"
+    msg "⚠️  No suitable coding models found"
     msg "  Install one:"
     msg "    ollama pull qwen2.5-coder:7b"
     msg ""
     return 1
   fi
+
+  # Strip quotes from model name
+  model=$(echo "$model" | sed 's/^"//;s/"$//')
   
   # Check memory
   if ! check_memory_and_cleanup "$model" ; then
