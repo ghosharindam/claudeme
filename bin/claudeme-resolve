@@ -1593,6 +1593,8 @@ cmd_resolve() {
         local selected_model=$(jq -r '.model // empty' .claude/settings.json 2>/dev/null)
         if [[ -n "$selected_model" && "$selected_model" != "null" ]]; then
           env_block+=$'\n'"export ANTHROPIC_MODEL=$selected_model"
+          # Set context window for local models (most have 32k-128k, use 32k conservatively)
+          env_block+=$'\n'"export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32000"
         fi
       fi
     fi
@@ -1627,6 +1629,8 @@ cmd_resolve() {
         local selected_model=$(jq -r '.model // empty' .claude/settings.json 2>/dev/null)
         if [[ -n "$selected_model" && "$selected_model" != "null" ]]; then
           env_block+=$'\n'"export ANTHROPIC_MODEL=$selected_model"
+          # Set context window for local models (most have 32k-128k, use 32k conservatively)
+          env_block+=$'\n'"export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32000"
         fi
       fi
     fi
