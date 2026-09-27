@@ -1,0 +1,87 @@
+# Benchmark Configuration
+# Defines backends and routing strategies to test
+
+# ── Backends ──────────────────────────────────────────────────────────────────
+backends:
+  llama-server:
+    type: llama-server
+    model: "local"
+
+    # Direct connection (no intermediary)
+    direct:
+      enabled: true
+      url: http://localhost:8080
+      api_type: anthropic  # llama-server with --api-type anthropic
+
+    # Via LiteLLM proxy
+    via_litellm:
+      enabled: true
+      url: http://localhost:4000
+      litellm_model: "openai/localhost:8080/v1"
+
+  ollama:
+    type: ollama
+    model: "qwen2.5:7b-instruct"
+
+    # Direct connection (Ollama native API)
+    direct:
+      enabled: true
+      url: http://localhost:11434
+      api_type: ollama  # Native Ollama API format
+
+    # Via LiteLLM proxy (required for Anthropic API format)
+    via_litellm:
+      enabled: true
+      url: http://localhost:4000
+      litellm_model: "ollama/qwen2.5:7b-instruct"
+
+# ── Test Scenarios ────────────────────────────────────────────────────────────
+# Each scenario runs as a separate benchmark
+
+test_scenarios:
+  # Scenario 1: llama-server direct (baseline)
+  - name: "llama-server-direct"
+    backend: llama-server
+    routing: direct
+    description: "Direct llama-server (baseline for llama.cpp)"
+
+  # Scenario 2: llama-server via LiteLLM (overhead measurement)
+  - name: "llama-server-litellm"
+    backend: llama-server
+    routing: via_litellm
+    description: "llama-server via LiteLLM (measure proxy overhead)"
+
+  # Scenario 3: Ollama via LiteLLM (baseline for Ollama)
+  - name: "ollama-litellm"
+    backend: ollama
+    routing: via_litellm
+    description: "Ollama via LiteLLM (required for Anthropic API)"
+
+# ── Benchmark Parameters ──────────────────────────────────────────────────────
+benchmark:
+  requests: 20              # Number of requests per scenario
+  warmup_requests: 2        # Warmup requests (not counted)
+  prompt: "Explain quantum computing in one sentence."
+  max_tokens: 50
+  timeout_ms: 60000         # Per-request timeout
+
+# ── Output Settings ───────────────────────────────────────────────────────────
+output:
+  results_dir: "./results"
+  format: csv               # csv or json
+  include_raw_timings: true # Save individual request times
+
+# ── Comparison Thresholds ─────────────────────────────────────────────────────
+# Used to assess overhead acceptability
+
+thresholds:
+  overhead_acceptable_ms: 50      # <50ms: negligible
+  overhead_noticeable_ms: 150     # 50-150ms: acceptable
+  # >150ms: significant
+
+# ── Auto-detection ────────────────────────────────────────────────────────────
+# Automatically detect running backends before benchmark
+
+auto_detect:
+  enabled: true
+  skip_disabled: true  # Skip scenarios if backend not running
