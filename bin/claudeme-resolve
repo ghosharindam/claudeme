@@ -1005,16 +1005,13 @@ auto_start_litellm_if_needed() {
   
   case "$response" in
     yes)
-      # Remember if user wants
+      # Auto-save decision (no prompt needed)
       if [[ "$last_decision" == "null" ]]; then
-        msg "Remember this choice? [Y/n]: "
-        read -r remember
-        if [[ ! "$remember" =~ ^[Nn] ]]; then
-          save_auto_start_decision "yes"
-          msg "✅ Saved preference (won't ask again)"
-        fi
+        save_auto_start_decision "yes"
+        msg "✅ Auto-start enabled (won't ask again)"
+        msg ""
       fi
-      
+
       # Start LiteLLM
       start_litellm "$model"
       return 0
