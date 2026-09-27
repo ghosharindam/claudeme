@@ -119,12 +119,6 @@ claudeme() {
   env_block=$(command claudeme-resolve "${resolver_args[@]+"${resolver_args[@]}"}" 2>/dev/tty) || return 1
   eval "$env_block"
 
-  # Prepend --model if the resolver resolved one
-  if [[ -n "${CLAUDEME_MODEL:-}" ]]; then
-    claude_args=(--model "$CLAUDEME_MODEL" "${claude_args[@]+"${claude_args[@]}"}")
-    unset CLAUDEME_MODEL
-  fi
-
   # For isolated sessions: cd into the session dir before execing claude
   if [[ -n "${CLAUDEME_SESSION_DIR:-}" ]]; then
     local session_dir="$CLAUDEME_SESSION_DIR"
@@ -132,6 +126,7 @@ claudeme() {
     cd "$session_dir" || return 1
   fi
 
+  # ANTHROPIC_MODEL env var is already set by resolver - just exec claude
   exec command claude "${claude_args[@]+"${claude_args[@]}"}"
 }
 '

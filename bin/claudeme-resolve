@@ -161,7 +161,7 @@ resolve_auth() {
   esac
 }
 
-# Prints CLAUDEME_MODEL=<name> if a model was resolved; prints nothing otherwise.
+# Prints ANTHROPIC_MODEL=<name> if a model was resolved; prints nothing otherwise.
 # Always exits 0 — callers must not rely on exit code for "did we emit a line".
 resolve_model() {
   local profile_json="$1"
@@ -170,13 +170,13 @@ resolve_model() {
   if [[ -n "$model_ref" ]]; then
     local resolved; resolved=$(echo "$profile_json" | jq -r --arg a "$model_ref" '.models[$a] // empty')
     if [[ -n "$resolved" ]]; then
-      echo "CLAUDEME_MODEL=$resolved"
+      echo "ANTHROPIC_MODEL=$resolved"
     else
-      echo "CLAUDEME_MODEL=$model_ref"   # verbatim — user may have typed a full model name
+      echo "ANTHROPIC_MODEL=$model_ref"   # verbatim — user may have typed a full model name
     fi
   else
     local default; default=$(echo "$profile_json" | jq -r '.model // empty')
-    [[ -n "$default" ]] && echo "CLAUDEME_MODEL=$default" || true
+    [[ -n "$default" ]] && echo "ANTHROPIC_MODEL=$default" || true
   fi
   return 0
 }
@@ -1337,6 +1337,9 @@ auto_configure_local_models() {
   msg "✓ Both \`claude\` and \`claudeme\` will use this model in this project"
   msg ""
 
+  # Output selected model to stdout (for env_block)
+  echo "CLAUDEME_SELECTED_MODEL=$selected_model"
+
   return 0
 }
 
@@ -1584,6 +1587,14 @@ cmd_resolve() {
     # ── Phase 3 Enhancement: Auto-configure local models ────────────────────
     if [[ -z "$resolved_profile" ]]; then
       auto_configure_local_models "$resolved_url" || true
+
+      # Add selected model to env block (for --model flag override)
+      if [[ -f .claude/settings.json ]]; then
+        local selected_model=$(jq -r '.model // empty' .claude/settings.json 2>/dev/null)
+        if [[ -n "$selected_model" && "$selected_model" != "null" ]]; then
+          env_block+=$'\n'"ANTHROPIC_MODEL=$selected_model"
+        fi
+      fi
     fi
 
     # ── Phase 5: Save full session (tool + model + endpoint) ─────────────────
@@ -1610,6 +1621,14 @@ cmd_resolve() {
     # ── Phase 3 Enhancement: Auto-configure local models ────────────────────
     if [[ -z "$resolved_profile" ]]; then
       auto_configure_local_models "$resolved_url" || true
+
+      # Add selected model to env block (overrides managed settings!)
+      if [[ -f .claude/settings.json ]]; then
+        local selected_model=$(jq -r '.model // empty' .claude/settings.json 2>/dev/null)
+        if [[ -n "$selected_model" && "$selected_model" != "null" ]]; then
+          env_block+=$'\n'"ANTHROPIC_MODEL=$selected_model"
+        fi
+      fi
     fi
 
     # ── Phase 5: Save full session (tool + model + endpoint) ─────────────────
