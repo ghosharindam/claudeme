@@ -537,231 +537,11 @@ cmd_resolve_local_forced() {
   emit_local_from_probes "$tmp"
 }
 
-cmd_resolve_auto() {
-  # Build a combined list of local backends + named profiles, show menu if multiple
-  local tmp; tmp=$(mktemp -d)
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
-  probe_backends "$tmp"
 
-  # Options: each entry is "label|url|kind" where kind is "local" or "profile:<name>"
-  local opts_label=() opts_url=() opts_kind=()
-
-  [[ -f "$tmp/llama" ]] && {
-    opts_label+=("local   llama.cpp at http://localhost:8080")
-    opts_url+=("http://localhost:8080")
-    opts_kind+=("local")
-  }
-  if [[ -f "$tmp/litellm" ]]; then
-    # LiteLLM is up — it may front ollama/edge/custom
-    if [[ -f "$tmp/ollama" ]]; then
-      opts_label+=("local   Ollama via LiteLLM at http://localhost:4000")
-    elif [[ -f "$tmp/edge" ]]; then
-      opts_label+=("local   Edge Gallery via LiteLLM at http://localhost:4000")
-    else
-      opts_label+=("local   LiteLLM proxy at http://localhost:4000")
-    fi
-    opts_url+=("http://localhost:4000")
-    opts_kind+=("local")
-  elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
-    # ── Phase 4: Auto-Start LiteLLM ───────────────────────────────────────────
-    # Ollama/Edge detected but LiteLLM not running
-    # Offer to start LiteLLM automatically with smart model selection
-    need_yq  # Needed for config reading
-
-    if auto_start_litellm_if_needed; then
-      # LiteLLM was started! Update probes
-      probe_backends "$tmp"
-      # Fall through to recheck LiteLLM option
-      if [[ -f "$tmp/litellm" ]]; then
-        if [[ -f "$tmp/ollama" ]]; then
-          opts_label+=("local   Ollama via LiteLLM at http://localhost:4000")
-        elif [[ -f "$tmp/edge" ]]; then
-          opts_label+=("local   Edge Gallery via LiteLLM at http://localhost:4000")
-        else
-          opts_label+=("local   LiteLLM proxy at http://localhost:4000")
-        fi
-        opts_url+=("http://localhost:4000")
-        opts_kind+=("local")
-      fi
-    fi
-  fi
-
-  # Append named profiles
-  ensure_profiles
-  while IFS=$'\t' read -r pname purl; do
-    [[ -z "$pname" ]] && continue
-    opts_label+=("$pname   $purl")
-    opts_url+=("$purl")
-    opts_kind+=("profile:$pname")
-  done < <(jq -r 'to_entries[] | [.key, .value.url] | @tsv' "$PROFILES_FILE" 2>/dev/null || true)
-
-  local n="${#opts_label[@]}"
-
-  if [[ "$n" -eq 0 ]]; then
-    msg "error: no endpoints available"
-    msg ""
-    msg "Options:"
-    msg "  • Start a local model server (llama.cpp, Ollama + LiteLLM, etc.)"
-    msg "  • Add a cloud profile: claudeme add <name> <url> --auth <type>"
-    exit 1
-  fi
-
-  local chosen=0
-  if [[ "$n" -gt 1 ]]; then
-    msg ""
-    msg "  Select endpoint:"
-    local i=1
-    for label in "${opts_label[@]}"; do
-      msg "    $i) $label"
-      ((i++)) || true
-    done
-    msg ""
-    printf "    Choice: " >&2
-    local choice; read -r choice </dev/tty
-    msg ""
-    [[ "$choice" =~ ^[0-9]+$ ]] || die "invalid choice: $choice"
-    [[ "$choice" -ge 1 && "$choice" -le "$n" ]] || die "choice out of range (1–$n)"
-    chosen=$(( choice - 1 ))
-  fi
-
-  local url="${opts_url[$chosen]}"
-  local kind="${opts_kind[$chosen]}"
-
-  if [[ "$kind" == "local" ]]; then
-    echo "ANTHROPIC_BASE_URL=$url"
-    echo "ANTHROPIC_API_KEY=local"
-  else
-    local pname="${kind#profile:}"
-    local profile_json; profile_json=$(profile_get "$pname")
-    resolve_auth "$profile_json"
-    resolve_model "$profile_json" ""
-  fi
-}
-
-# ── Main resolve ───────────────────────────────────────────────────────────────
-
-cmd_resolve() {
-  need_jq
-  local isolated=false do_continue=false profile_name="" model_ref=""
-
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --isolated)  isolated=true;         shift ;;
-      --continue)  do_continue=true;      shift ;;
-      --profile)   profile_name="$2";     shift 2 ;;
-      --model-ref) model_ref="$2";        shift 2 ;;
-      "") shift ;;
-      *) die "unknown resolver arg: $1" ;;
-    esac
-  done
-
-  local work_dir="$PWD"
-  local env_block=""
-  local resolved_profile="" resolved_url=""
-
-  # ── STEP 1: Determine endpoint ──────────────────────────────────────────────
-
-  if [[ "$profile_name" == "local" ]]; then
-    env_block=$(cmd_resolve_local_forced)
-    resolved_profile=""
-    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
-
-  elif [[ -n "$profile_name" ]]; then
-    local profile_json; profile_json=$(profile_get "$profile_name") || {
-      msg "error: profile '$profile_name' not found"
-      msg ""
-      msg "Available profiles:"
-      jq -r 'keys[] | "  \(.)"' "$PROFILES_FILE" 2>/dev/null || msg "  (none)"
-      exit 1
-    }
-    env_block=$(resolve_auth "$profile_json")
-    local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
-    [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
-    resolved_profile="$profile_name"
-    resolved_url=$(echo "$profile_json" | jq -r '.url')
-
-  elif $do_continue; then
-    # ── Phase 5: Session Resume ──────────────────────────────────────────────
-    # Try session history first (tool + model + endpoint)
-    need_yq  # Needed for session functions
-
-    local resumed_endpoint
-    if resumed_endpoint=$(resume_session); then
-      # Successfully resumed local session (Ollama/llama-server)
-      env_block="ANTHROPIC_BASE_URL=$resumed_endpoint"$'\n'"ANTHROPIC_API_KEY=local"
-      resolved_profile=""
-      resolved_url="$resumed_endpoint"
-    else
-      # No local session or failed to resume - fall back to profile-based continue
-      local last; last=$(session_get_profile "$work_dir")
-      if [[ -n "$last" && "$last" != "null" ]]; then
-        msg "→ Continuing on $last"
-        local profile_json; profile_json=$(profile_get "$last") || die "last-used profile '$last' no longer exists — run: claudeme list"
-        env_block=$(resolve_auth "$profile_json")
-        local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
-        [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
-        resolved_profile="$last"
-        resolved_url=$(echo "$profile_json" | jq -r '.url')
-      else
-        msg "→ No previous session - auto-detecting"
-        env_block=$(cmd_resolve_auto)
-        resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
-        resolved_profile=""
-      fi
-    fi
-
-  elif [[ -n "${CLAUDEME_PROFILE:-}" ]]; then
-    local profile_json; profile_json=$(profile_get "$CLAUDEME_PROFILE") || \
-      die "CLAUDEME_PROFILE='$CLAUDEME_PROFILE' not found in profiles"
-    env_block=$(resolve_auth "$profile_json")
-    local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
-    [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
-    resolved_profile="$CLAUDEME_PROFILE"
-    resolved_url=$(echo "$profile_json" | jq -r '.url')
-
-  elif [[ -n "${CLAUDE_LOCAL_URL:-}" ]]; then
-    env_block="ANTHROPIC_BASE_URL=$CLAUDE_LOCAL_URL"$'\n'"ANTHROPIC_API_KEY=local"
-    resolved_profile=""
-    resolved_url="$CLAUDE_LOCAL_URL"
-
-  else
-    env_block=$(cmd_resolve_auto)
-    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
-    resolved_profile=""
-  fi
-
-  # ── STEP 4: Isolated directory ──────────────────────────────────────────────
-
-  if $isolated; then
-    local hash; hash=$(printf '%s' "$work_dir" | shasum -a 256 | cut -c1-8)
-    local iso_dir="$ISOLATED_BASE/$hash"
-    mkdir -p "$iso_dir"
-    env_block+=$'\n'"CLAUDEME_SESSION_DIR=$iso_dir"
-    session_update "$iso_dir" "$resolved_profile" "$resolved_url"
-    # TODO: Save full session (tool, model) for Phase 5 resume
-  else
-    session_update "$work_dir" "$resolved_profile" "$resolved_url"
-    # TODO: Save full session (tool, model) for Phase 5 resume
-  fi
-
-  # ── STEP 5: Emit env block (stdout only, no blank lines) ───────────────────
-  printf '%s\n' "$env_block" | grep -v '^[[:space:]]*$'
-}
-
-# ── Dispatch ───────────────────────────────────────────────────────────────────
-
-case "${1:-}" in
-  add)            cmd_add            "${@:2}" ;;
-  remove)         cmd_remove         "${@:2}" ;;
-  list)           cmd_list                    ;;
-  test)           cmd_test           "${@:2}" ;;
-  profile-models) cmd_profile_models "${@:2}" ;;
-  models)         cmd_models         "${@:2}" ;;
-  --isolated|--continue|--profile|--model-ref|"")
-                  cmd_resolve        "$@"     ;;
-  *)              die "unknown subcommand: $1 — try: claudeme list" ;;
-esac
+# ══════════════════════════════════════════════════════════════════════════════
+# Phase 2-5 Functions
+# Must be defined before main resolve (called by cmd_resolve_auto)
+# ══════════════════════════════════════════════════════════════════════════════
 
 # ── Phase 2: Config Loading & Detection ───────────────────────────────────────
 
@@ -1397,4 +1177,235 @@ is_continue_session() {
   # This will be integrated into main arg parsing
   return 1  # Placeholder
 }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Main Resolve & Dispatch
+# ══════════════════════════════════════════════════════════════════════════════
+
+cmd_resolve_auto() {
+  # Build a combined list of local backends + named profiles, show menu if multiple
+  local tmp; tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" EXIT
+  probe_backends "$tmp"
+
+  # Options: each entry is "label|url|kind" where kind is "local" or "profile:<name>"
+  local opts_label=() opts_url=() opts_kind=()
+
+  [[ -f "$tmp/llama" ]] && {
+    opts_label+=("local   llama.cpp at http://localhost:8080")
+    opts_url+=("http://localhost:8080")
+    opts_kind+=("local")
+  }
+  if [[ -f "$tmp/litellm" ]]; then
+    # LiteLLM is up — it may front ollama/edge/custom
+    if [[ -f "$tmp/ollama" ]]; then
+      opts_label+=("local   Ollama via LiteLLM at http://localhost:4000")
+    elif [[ -f "$tmp/edge" ]]; then
+      opts_label+=("local   Edge Gallery via LiteLLM at http://localhost:4000")
+    else
+      opts_label+=("local   LiteLLM proxy at http://localhost:4000")
+    fi
+    opts_url+=("http://localhost:4000")
+    opts_kind+=("local")
+  elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
+    # ── Phase 4: Auto-Start LiteLLM ───────────────────────────────────────────
+    # Ollama/Edge detected but LiteLLM not running
+    # Offer to start LiteLLM automatically with smart model selection
+    need_yq  # Needed for config reading
+
+    if auto_start_litellm_if_needed; then
+      # LiteLLM was started! Update probes
+      probe_backends "$tmp"
+      # Fall through to recheck LiteLLM option
+      if [[ -f "$tmp/litellm" ]]; then
+        if [[ -f "$tmp/ollama" ]]; then
+          opts_label+=("local   Ollama via LiteLLM at http://localhost:4000")
+        elif [[ -f "$tmp/edge" ]]; then
+          opts_label+=("local   Edge Gallery via LiteLLM at http://localhost:4000")
+        else
+          opts_label+=("local   LiteLLM proxy at http://localhost:4000")
+        fi
+        opts_url+=("http://localhost:4000")
+        opts_kind+=("local")
+      fi
+    fi
+  fi
+
+  # Append named profiles
+  ensure_profiles
+  while IFS=$'\t' read -r pname purl; do
+    [[ -z "$pname" ]] && continue
+    opts_label+=("$pname   $purl")
+    opts_url+=("$purl")
+    opts_kind+=("profile:$pname")
+  done < <(jq -r 'to_entries[] | [.key, .value.url] | @tsv' "$PROFILES_FILE" 2>/dev/null || true)
+
+  local n="${#opts_label[@]}"
+
+  if [[ "$n" -eq 0 ]]; then
+    msg "error: no endpoints available"
+    msg ""
+    msg "Options:"
+    msg "  • Start a local model server (llama.cpp, Ollama + LiteLLM, etc.)"
+    msg "  • Add a cloud profile: claudeme add <name> <url> --auth <type>"
+    exit 1
+  fi
+
+  local chosen=0
+  if [[ "$n" -gt 1 ]]; then
+    msg ""
+    msg "  Select endpoint:"
+    local i=1
+    for label in "${opts_label[@]}"; do
+      msg "    $i) $label"
+      ((i++)) || true
+    done
+    msg ""
+    printf "    Choice: " >&2
+    local choice; read -r choice </dev/tty
+    msg ""
+    [[ "$choice" =~ ^[0-9]+$ ]] || die "invalid choice: $choice"
+    [[ "$choice" -ge 1 && "$choice" -le "$n" ]] || die "choice out of range (1–$n)"
+    chosen=$(( choice - 1 ))
+  fi
+
+  local url="${opts_url[$chosen]}"
+  local kind="${opts_kind[$chosen]}"
+
+  if [[ "$kind" == "local" ]]; then
+    echo "ANTHROPIC_BASE_URL=$url"
+    echo "ANTHROPIC_API_KEY=local"
+  else
+    local pname="${kind#profile:}"
+    local profile_json; profile_json=$(profile_get "$pname")
+    resolve_auth "$profile_json"
+    resolve_model "$profile_json" ""
+  fi
+}
+
+# ── Main resolve ───────────────────────────────────────────────────────────────
+
+cmd_resolve() {
+  need_jq
+  local isolated=false do_continue=false profile_name="" model_ref=""
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --isolated)  isolated=true;         shift ;;
+      --continue)  do_continue=true;      shift ;;
+      --profile)   profile_name="$2";     shift 2 ;;
+      --model-ref) model_ref="$2";        shift 2 ;;
+      "") shift ;;
+      *) die "unknown resolver arg: $1" ;;
+    esac
+  done
+
+  local work_dir="$PWD"
+  local env_block=""
+  local resolved_profile="" resolved_url=""
+
+  # ── STEP 1: Determine endpoint ──────────────────────────────────────────────
+
+  if [[ "$profile_name" == "local" ]]; then
+    env_block=$(cmd_resolve_local_forced)
+    resolved_profile=""
+    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+
+  elif [[ -n "$profile_name" ]]; then
+    local profile_json; profile_json=$(profile_get "$profile_name") || {
+      msg "error: profile '$profile_name' not found"
+      msg ""
+      msg "Available profiles:"
+      jq -r 'keys[] | "  \(.)"' "$PROFILES_FILE" 2>/dev/null || msg "  (none)"
+      exit 1
+    }
+    env_block=$(resolve_auth "$profile_json")
+    local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+    [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+    resolved_profile="$profile_name"
+    resolved_url=$(echo "$profile_json" | jq -r '.url')
+
+  elif $do_continue; then
+    # ── Phase 5: Session Resume ──────────────────────────────────────────────
+    # Try session history first (tool + model + endpoint)
+    need_yq  # Needed for session functions
+
+    local resumed_endpoint
+    if resumed_endpoint=$(resume_session); then
+      # Successfully resumed local session (Ollama/llama-server)
+      env_block="ANTHROPIC_BASE_URL=$resumed_endpoint"$'\n'"ANTHROPIC_API_KEY=local"
+      resolved_profile=""
+      resolved_url="$resumed_endpoint"
+    else
+      # No local session or failed to resume - fall back to profile-based continue
+      local last; last=$(session_get_profile "$work_dir")
+      if [[ -n "$last" && "$last" != "null" ]]; then
+        msg "→ Continuing on $last"
+        local profile_json; profile_json=$(profile_get "$last") || die "last-used profile '$last' no longer exists — run: claudeme list"
+        env_block=$(resolve_auth "$profile_json")
+        local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+        [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+        resolved_profile="$last"
+        resolved_url=$(echo "$profile_json" | jq -r '.url')
+      else
+        msg "→ No previous session - auto-detecting"
+        env_block=$(cmd_resolve_auto)
+        resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+        resolved_profile=""
+      fi
+    fi
+
+  elif [[ -n "${CLAUDEME_PROFILE:-}" ]]; then
+    local profile_json; profile_json=$(profile_get "$CLAUDEME_PROFILE") || \
+      die "CLAUDEME_PROFILE='$CLAUDEME_PROFILE' not found in profiles"
+    env_block=$(resolve_auth "$profile_json")
+    local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+    [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+    resolved_profile="$CLAUDEME_PROFILE"
+    resolved_url=$(echo "$profile_json" | jq -r '.url')
+
+  elif [[ -n "${CLAUDE_LOCAL_URL:-}" ]]; then
+    env_block="ANTHROPIC_BASE_URL=$CLAUDE_LOCAL_URL"$'\n'"ANTHROPIC_API_KEY=local"
+    resolved_profile=""
+    resolved_url="$CLAUDE_LOCAL_URL"
+
+  else
+    env_block=$(cmd_resolve_auto)
+    resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+    resolved_profile=""
+  fi
+
+  # ── STEP 4: Isolated directory ──────────────────────────────────────────────
+
+  if $isolated; then
+    local hash; hash=$(printf '%s' "$work_dir" | shasum -a 256 | cut -c1-8)
+    local iso_dir="$ISOLATED_BASE/$hash"
+    mkdir -p "$iso_dir"
+    env_block+=$'\n'"CLAUDEME_SESSION_DIR=$iso_dir"
+    session_update "$iso_dir" "$resolved_profile" "$resolved_url"
+    # TODO: Save full session (tool, model) for Phase 5 resume
+  else
+    session_update "$work_dir" "$resolved_profile" "$resolved_url"
+    # TODO: Save full session (tool, model) for Phase 5 resume
+  fi
+
+  # ── STEP 5: Emit env block (stdout only, no blank lines) ───────────────────
+  printf '%s\n' "$env_block" | grep -v '^[[:space:]]*$'
+}
+
+# ── Dispatch ───────────────────────────────────────────────────────────────────
+
+case "${1:-}" in
+  add)            cmd_add            "${@:2}" ;;
+  remove)         cmd_remove         "${@:2}" ;;
+  list)           cmd_list                    ;;
+  test)           cmd_test           "${@:2}" ;;
+  profile-models) cmd_profile_models "${@:2}" ;;
+  models)         cmd_models         "${@:2}" ;;
+  --isolated|--continue|--profile|--model-ref|"")
+                  cmd_resolve        "$@"     ;;
+  *)              die "unknown subcommand: $1 — try: claudeme list" ;;
+esac
 
