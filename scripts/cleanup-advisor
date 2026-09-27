@@ -45,7 +45,7 @@ show_app_ram_totals() {
     {
       app = $1
       if (app ~ /^[Cc]ode/) app = "Visual Studio Code"
-      if (app ~ /^[Cc]hrome/) app = "Google Chrome"
+      if (app ~ /^[Cc]hrome/ || app ~ /^[Gg]oogle/) app = "Google Chrome"
       if (app ~ /^[Bb]rave/) app = "Brave Browser"
       if (app ~ /^[Ss]lack/) app = "Slack"
       if (app ~ /^[Dd]iscord/) app = "Discord"
