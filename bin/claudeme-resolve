@@ -564,11 +564,26 @@ cmd_resolve_auto() {
     opts_url+=("http://localhost:4000")
     opts_kind+=("local")
   elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
-    msg "warning: Ollama/Edge Gallery detected but LiteLLM proxy on :4000 is not running"
-    if ! command -v litellm &>/dev/null; then
-      msg "litellm is not installed. Run: cd ~/Documents/my_workspace/claudeme && ./install.sh"
-    else
-      msg "Start it with: litellm --model ollama/llama3.2 --port 4000"
+    # ── Phase 4: Auto-Start LiteLLM ───────────────────────────────────────────
+    # Ollama/Edge detected but LiteLLM not running
+    # Offer to start LiteLLM automatically with smart model selection
+    need_yq  # Needed for config reading
+
+    if auto_start_litellm_if_needed; then
+      # LiteLLM was started! Update probes
+      probe_backends "$tmp"
+      # Fall through to recheck LiteLLM option
+      if [[ -f "$tmp/litellm" ]]; then
+        if [[ -f "$tmp/ollama" ]]; then
+          opts_label+=("local   Ollama via LiteLLM at http://localhost:4000")
+        elif [[ -f "$tmp/edge" ]]; then
+          opts_label+=("local   Edge Gallery via LiteLLM at http://localhost:4000")
+        else
+          opts_label+=("local   LiteLLM proxy at http://localhost:4000")
+        fi
+        opts_url+=("http://localhost:4000")
+        opts_kind+=("local")
+      fi
     fi
   fi
 
@@ -667,20 +682,33 @@ cmd_resolve() {
     resolved_url=$(echo "$profile_json" | jq -r '.url')
 
   elif $do_continue; then
-    local last; last=$(session_get_profile "$work_dir")
-    if [[ -n "$last" && "$last" != "null" ]]; then
-      msg "→ Continuing on $last"
-      local profile_json; profile_json=$(profile_get "$last") || die "last-used profile '$last' no longer exists — run: claudeme list"
-      env_block=$(resolve_auth "$profile_json")
-      local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
-      [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
-      resolved_profile="$last"
-      resolved_url=$(echo "$profile_json" | jq -r '.url')
-    else
-      msg "→ Continuing on local"
-      env_block=$(cmd_resolve_local_forced)
+    # ── Phase 5: Session Resume ──────────────────────────────────────────────
+    # Try session history first (tool + model + endpoint)
+    need_yq  # Needed for session functions
+
+    local resumed_endpoint
+    if resumed_endpoint=$(resume_session); then
+      # Successfully resumed local session (Ollama/llama-server)
+      env_block="ANTHROPIC_BASE_URL=$resumed_endpoint"$'\n'"ANTHROPIC_API_KEY=local"
       resolved_profile=""
-      resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+      resolved_url="$resumed_endpoint"
+    else
+      # No local session or failed to resume - fall back to profile-based continue
+      local last; last=$(session_get_profile "$work_dir")
+      if [[ -n "$last" && "$last" != "null" ]]; then
+        msg "→ Continuing on $last"
+        local profile_json; profile_json=$(profile_get "$last") || die "last-used profile '$last' no longer exists — run: claudeme list"
+        env_block=$(resolve_auth "$profile_json")
+        local model_line; model_line=$(resolve_model "$profile_json" "$model_ref")
+        [[ -n "$model_line" ]] && env_block+=$'\n'"$model_line" || true
+        resolved_profile="$last"
+        resolved_url=$(echo "$profile_json" | jq -r '.url')
+      else
+        msg "→ No previous session - auto-detecting"
+        env_block=$(cmd_resolve_auto)
+        resolved_url=$(echo "$env_block" | grep '^ANTHROPIC_BASE_URL=' | cut -d= -f2-)
+        resolved_profile=""
+      fi
     fi
 
   elif [[ -n "${CLAUDEME_PROFILE:-}" ]]; then
@@ -711,8 +739,10 @@ cmd_resolve() {
     mkdir -p "$iso_dir"
     env_block+=$'\n'"CLAUDEME_SESSION_DIR=$iso_dir"
     session_update "$iso_dir" "$resolved_profile" "$resolved_url"
+    # TODO: Save full session (tool, model) for Phase 5 resume
   else
     session_update "$work_dir" "$resolved_profile" "$resolved_url"
+    # TODO: Save full session (tool, model) for Phase 5 resume
   fi
 
   # ── STEP 5: Emit env block (stdout only, no blank lines) ───────────────────
