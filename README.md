@@ -91,11 +91,27 @@ command claude -c
 
 ### Re-installing / updating
 
-Run `./install.sh` again at any time — it's fully idempotent:
-- Detects what's already installed
-- Only installs or updates missing/outdated components
-- Safe to run multiple times
-- No sudo required (installs to `~/.local/bin`)
+**To get updates:**
+```bash
+git pull               # Get latest changes
+./install.sh          # Update installed scripts
+```
+
+The installer is **fully idempotent** — run it multiple times safely:
+- ✅ Detects what's already installed
+- ✅ Only updates files that changed (smart diff check)
+- ✅ Skips unchanged files
+- ✅ Safe to run 100 times
+- ✅ No sudo required
+
+**Example output:**
+```
+✅ claudeme-resolve already up to date
+✅ Updated cleanup-advisor
+```
+
+**Can I delete the repo after install?**  
+Yes! Both `claudeme` and `cleanup-advisor` are **copied** to `~/.local/bin`, so they work even after deleting the source repo. To get updates later, just re-download the repo and re-run `./install.sh`.
 
 ---
 
@@ -103,16 +119,9 @@ Run `./install.sh` again at any time — it's fully idempotent:
 
 ### cleanup-advisor - System Resource Cleanup
 
-Find processes hogging RAM/CPU before resource-intensive tasks:
+Find processes hogging RAM/CPU before resource-intensive tasks.
 
-```bash
-# See what's using resources (shows aggregated multi-process apps!)
-./scripts/cleanup-advisor
-
-# Install system-wide
-ln -s $(pwd)/scripts/cleanup-advisor ~/.local/bin/
-cleanup-advisor --help
-```
+**Installed automatically by `install.sh`** - just run `cleanup-advisor` after installation!
 
 **Use cases:**
 - Before benchmarking (get accurate results)
@@ -129,6 +138,17 @@ Application RAM Totals (multiple processes grouped):
   
 - Google Chrome        15 procs  3200MB (3.1GB)
   Kill: pkill -x 'Google Chrome'
+  
+- Claude Code          9 procs   1449MB (1.4GB)
+  ⚠️  Don't kill - this is your current Claude Code session!
+```
+
+**Usage:**
+```bash
+cleanup-advisor           # Show all recommendations
+cleanup-advisor --ram     # RAM hogs only
+cleanup-advisor --cpu     # CPU hogs only
+cleanup-advisor --help    # Show help
 ```
 
 See [`scripts/README.md`](scripts/README.md) for full documentation.
