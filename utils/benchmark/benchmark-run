@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# benchmark-run - Main entry point for claudeme benchmarking
+#
+# Usage:
+#   benchmark-run              # Run all benchmark scenarios
+#   benchmark-run baseline     # Run baseline only
+#   benchmark-run cleanup      # Show cleanup suggestions
+#   benchmark-run help         # Show help
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Default to run-all if no command specified
+COMMAND="${1:-all}"
+
+case "$COMMAND" in
+  all|run-all)
+    exec "$SCRIPT_DIR/lib/run-all.sh" "${@:2}"
+    ;;
+
+  baseline)
+    exec "$SCRIPT_DIR/lib/baseline.sh" "${@:2}"
+    ;;
+
+  cleanup)
+    exec "$SCRIPT_DIR/../cleanup-advisor/cleanup-advisor" "${@:2}"
+    ;;
+
+  state|system-state)
+    exec "$SCRIPT_DIR/lib/capture-system-state.sh" "${@:2}"
+    ;;
+
+  env|capture-env)
+    exec "$SCRIPT_DIR/lib/capture-env.sh" "${@:2}"
+    ;;
+
+  help|--help|-h)
+    cat <<EOF
+benchmark-run - Benchmarking utility for claudeme
+
+Usage:
+  benchmark-run [command] [options]
+
+Commands:
+  all              Run all benchmark scenarios (default)
+  baseline         Run baseline benchmark only
+  cleanup          Show cleanup suggestions (free up resources)
+  state            Capture current system state
+  env              Capture environment versions
+  help             Show this help
+
+Examples:
+  benchmark-run                    # Run all benchmarks
+  benchmark-run baseline           # Baseline only
+  benchmark-run cleanup            # See what's using RAM/CPU
+  benchmark-run cleanup --ram      # RAM hogs only
+
+Configuration:
+  Edit $SCRIPT_DIR/config.yaml to customize scenarios
+
+Results:
+  Saved to $SCRIPT_DIR/results/
+
+Documentation:
+  See $SCRIPT_DIR/BEST_PRACTICES.md for fair benchmarking guide
+  See $SCRIPT_DIR/README.md for quick start
+EOF
+    ;;
+
+  *)
+    echo "Unknown command: $COMMAND"
+    echo "Run 'benchmark-run help' for usage"
+    exit 1
+    ;;
+esac

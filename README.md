@@ -115,43 +115,37 @@ Yes! Both `claudeme` and `cleanup-advisor` are **copied** to `~/.local/bin`, so 
 
 ---
 
-## Standalone Utilities
+## Utilities
+
+Installed automatically by `./install.sh`:
 
 ### cleanup-advisor - System Resource Cleanup
 
 Find processes hogging RAM/CPU before resource-intensive tasks.
 
-**Installed automatically by `install.sh`** - just run `cleanup-advisor` after installation!
-
-**Use cases:**
-- Before benchmarking (get accurate results)
-- Before compiling large projects (faster builds)
-- Before video editing (ensure enough RAM)
-- System feels slow (diagnose what's eating resources)
-
-**Example output:**
-```
-Application RAM Totals (multiple processes grouped):
-
-- Visual Studio Code   10 procs  5120MB (5.0GB)  ← Catches hidden hogs!
-  Kill: code --stop  or  pkill -x 'Code'
-  
-- Google Chrome        15 procs  3200MB (3.1GB)
-  Kill: pkill -x 'Google Chrome'
-  
-- Claude Code          9 procs   1449MB (1.4GB)
-  ⚠️  Don't kill - this is your current Claude Code session!
-```
-
-**Usage:**
 ```bash
 cleanup-advisor           # Show all recommendations
 cleanup-advisor --ram     # RAM hogs only
 cleanup-advisor --cpu     # CPU hogs only
-cleanup-advisor --help    # Show help
 ```
 
-See [`scripts/README.md`](scripts/README.md) for full documentation.
+**Catches multi-process apps** like VSCode (5GB across 10 helpers) and Chrome!
+
+See [`utils/cleanup-advisor/README.md`](utils/cleanup-advisor/README.md)
+
+### benchmark-run - Performance Benchmarking
+
+Benchmark claudeme with fair comparisons and bias detection.
+
+```bash
+benchmark-run             # Run all benchmarks
+benchmark-run baseline    # Baseline only
+benchmark-run cleanup     # Free up resources first
+```
+
+**Detects bias** (memory pressure, running servers) and provides cleanup suggestions.
+
+See [`utils/benchmark/README.md`](utils/benchmark/README.md)
 
 ---
 

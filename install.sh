@@ -3,7 +3,9 @@
 #
 # WHAT THIS DOES:
 #   1. Installs claudeme-resolve binary to ~/.local/bin (no sudo needed)
-#   2. Installs cleanup-advisor utility to ~/.local/bin
+#   2. Installs utilities to ~/.local/bin:
+#      - cleanup-advisor: System resource cleanup
+#      - benchmark-run: Performance benchmarking
 #   3. Adds claudeme shell function to ~/.zshrc
 #   4. Auto-installs dependencies: jq, litellm[proxy]
 #
@@ -23,8 +25,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"                # Source script in repo
 RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"         # Destination (user-writable, no sudo)
-CLEANUP_SRC="$SCRIPT_DIR/scripts/cleanup-advisor"         # Standalone utility
-CLEANUP_DEST="$HOME/.local/bin/cleanup-advisor"           # Destination
+CLEANUP_SRC="$SCRIPT_DIR/utils/cleanup-advisor/cleanup-advisor"    # Cleanup utility
+CLEANUP_DEST="$HOME/.local/bin/cleanup-advisor"                  # Destination
+BENCHMARK_SRC="$SCRIPT_DIR/utils/benchmark/benchmark-run"        # Benchmark utility
+BENCHMARK_DEST="$HOME/.local/bin/benchmark-run"                  # Destination
 ZSHRC="$HOME/.zshrc"                                       # Shell config file
 
 # Markers to identify the claudeme block in .zshrc (for safe updates)
@@ -172,7 +176,7 @@ else
   check "Installed claudeme-resolve"
 fi
 
-# cleanup-advisor (standalone utility)
+# cleanup-advisor utility
 if [[ -f "$CLEANUP_SRC" ]]; then
   if [[ -f "$CLEANUP_DEST" ]]; then
     if ! diff -q "$CLEANUP_SRC" "$CLEANUP_DEST" &>/dev/null; then
@@ -189,6 +193,25 @@ if [[ -f "$CLEANUP_SRC" ]]; then
   fi
 else
   warn "cleanup-advisor source not found (skipping)"
+fi
+
+# benchmark-run utility
+if [[ -f "$BENCHMARK_SRC" ]]; then
+  if [[ -f "$BENCHMARK_DEST" ]]; then
+    if ! diff -q "$BENCHMARK_SRC" "$BENCHMARK_DEST" &>/dev/null; then
+      cp "$BENCHMARK_SRC" "$BENCHMARK_DEST"
+      chmod +x "$BENCHMARK_DEST"
+      check "Updated benchmark-run"
+    else
+      check "benchmark-run already up to date"
+    fi
+  else
+    cp "$BENCHMARK_SRC" "$BENCHMARK_DEST"
+    chmod +x "$BENCHMARK_DEST"
+    check "Installed benchmark-run"
+  fi
+else
+  warn "benchmark-run source not found (skipping)"
 fi
 
 # 3. Check and install dependencies
@@ -310,9 +333,9 @@ echo "║   Installation complete!                        ║"
 echo "╚══════════════════════════════════════════════════╝"
 echo ""
 msg "✅ claudeme installed and added to ~/.zshrc"
-if [[ -f "$CLEANUP_DEST" ]]; then
-  msg "✅ cleanup-advisor installed (system-wide utility)"
-fi
+msg "✅ Utilities installed:"
+[[ -f "$CLEANUP_DEST" ]] && msg "   - cleanup-advisor (system resource cleanup)"
+[[ -f "$BENCHMARK_DEST" ]] && msg "   - benchmark-run (performance benchmarking)"
 echo ""
 msg "To use in THIS terminal (current session):"
 msg "  source ~/.zshrc"
@@ -324,12 +347,10 @@ echo ""
 msg "Optional — alias 'claude' to 'claudeme':"
 msg "  echo 'alias claude=claudeme' >> ~/.zshrc && source ~/.zshrc"
 echo ""
-if [[ -f "$CLEANUP_DEST" ]]; then
-  msg "Try the cleanup-advisor utility:"
-  msg "  cleanup-advisor --help"
-  msg "  cleanup-advisor         # See what's using RAM/CPU"
-  echo ""
-fi
+msg "Try the utilities:"
+[[ -f "$CLEANUP_DEST" ]] && msg "  cleanup-advisor         # See what's using RAM/CPU"
+[[ -f "$BENCHMARK_DEST" ]] && msg "  benchmark-run           # Run performance benchmarks"
+echo ""
 msg "Escape hatch to reach Anthropic directly (even with alias):"
 msg "  command claude"
 echo ""
