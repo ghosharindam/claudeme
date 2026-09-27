@@ -111,7 +111,42 @@ The installer is **fully idempotent** — run it multiple times safely:
 ```
 
 **Can I delete the repo after install?**  
-Yes! Both `claudeme` and `cleanup-advisor` are **copied** to `~/.local/bin`, so they work even after deleting the source repo. To get updates later, just re-download the repo and re-run `./install.sh`.
+Yes! All scripts are **copied** to `~/.local/bin/claudeme/`, so they work even after deleting the source repo. To get updates later, just re-download the repo and re-run `./install.sh`.
+
+---
+
+### Uninstalling
+
+**Complete uninstall:**
+```bash
+# 1. Remove installed binaries
+rm -rf ~/.local/bin/claudeme/
+
+# 2. Remove shell function from ~/.zshrc
+# Open ~/.zshrc and delete the claudeme block between these markers:
+#   # ── claudeme ──────────────────────────────────────────────────────────────────
+#   # ── end claudeme ──────────────────────────────────────────────────────────────
+
+# 3. (Optional) Remove config and session data
+rm -rf ~/.claudeme/
+
+# 4. Reload shell
+source ~/.zshrc
+```
+
+**Keep config, remove only binaries:**
+```bash
+# Just remove installed scripts (keeps profiles and session history)
+rm -rf ~/.local/bin/claudeme/
+
+# Remove shell function from ~/.zshrc (see above)
+source ~/.zshrc
+```
+
+**What gets removed:**
+- `~/.local/bin/claudeme/` — Installed binaries (claudeme-resolve, cleanup-advisor, benchmark-run)
+- `~/.zshrc` — claudeme shell function block
+- `~/.claudeme/` — Config files (profiles.json, sessions.json) - optional
 
 ---
 

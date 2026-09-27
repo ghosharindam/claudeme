@@ -23,13 +23,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RESOLVER_SRC="$SCRIPT_DIR/claudeme-resolve"                # Source script in repo
-RESOLVER_DEST="$HOME/.local/bin/claudeme-resolve"         # Destination (user-writable, no sudo)
-CLEANUP_SRC="$SCRIPT_DIR/utils/cleanup-advisor/cleanup-advisor"    # Cleanup utility
-CLEANUP_DEST="$HOME/.local/bin/cleanup-advisor"                  # Destination
+INSTALL_DIR="$HOME/.local/bin/claudeme"                          # Install subdirectory
+RESOLVER_SRC="$SCRIPT_DIR/bin/claudeme-resolve"                  # Source script in repo
+RESOLVER_DEST="$INSTALL_DIR/claudeme-resolve"                    # Destination
+CLEANUP_SRC="$SCRIPT_DIR/utils/cleanup-advisor/cleanup-advisor"  # Cleanup utility
+CLEANUP_DEST="$INSTALL_DIR/cleanup-advisor"                      # Destination
 BENCHMARK_SRC="$SCRIPT_DIR/utils/benchmark/benchmark-run"        # Benchmark utility
-BENCHMARK_DEST="$HOME/.local/bin/benchmark-run"                  # Destination
-ZSHRC="$HOME/.zshrc"                                       # Shell config file
+BENCHMARK_DEST="$INSTALL_DIR/benchmark-run"                      # Destination
+ZSHRC="$HOME/.zshrc"                                             # Shell config file
 
 # Markers to identify the claudeme block in .zshrc (for safe updates)
 MARKER_BEGIN="# ── claudeme ──────────────────────────────────────────────────────────────────"
@@ -55,8 +56,8 @@ err() { echo "  ❌ $*"; }   # Error
 #   - Must eval env vars in the current shell (can't do this from a binary)
 #   - Can exec to replace the shell process (clean process tree)
 
-SHELL_FUNCTION='# Ensure ~/.local/bin is in PATH (where claudeme-resolve lives)
-export PATH="$HOME/.local/bin:$PATH"
+SHELL_FUNCTION='# Ensure ~/.local/bin/claudeme is in PATH (where claudeme binaries live)
+export PATH="$HOME/.local/bin/claudeme:$PATH"
 
 # Typo-tolerant alias (claudme → claudeme)
 alias claudme=claudeme
@@ -145,14 +146,19 @@ echo ""
 
 # ── Installation Steps ────────────────────────────────────────────────────────
 
-# 1. Ensure ~/.local/bin exists
-# WHY: This is where we install claudeme-resolve (user-writable, no sudo needed)
-msg "Checking ~/.local/bin..."
+# 1. Ensure install directory exists
+# WHY: Groups all claudeme binaries together in ~/.local/bin/claudeme/
+msg "Checking $INSTALL_DIR..."
+if [[ ! -d "$INSTALL_DIR" ]]; then
+  mkdir -p "$INSTALL_DIR"
+  check "Created $INSTALL_DIR"
+else
+  check "$INSTALL_DIR exists"
+fi
+
+# Ensure ~/.local/bin is in PATH (parent directory)
 if [[ ! -d "$HOME/.local/bin" ]]; then
   mkdir -p "$HOME/.local/bin"
-  check "Created ~/.local/bin"
-else
-  check "~/.local/bin exists"
 fi
 
 # 2. Copy scripts to ~/.local/bin

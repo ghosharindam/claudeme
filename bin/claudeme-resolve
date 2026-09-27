@@ -5,6 +5,9 @@
 #   - Local model servers (llama.cpp, LiteLLM, Ollama)
 #   - Named cloud profiles (GCP, AWS, custom endpoints)
 #
+# ⚠️  DO NOT RUN THIS DIRECTLY - Install first:
+#     ./install.sh
+#
 # OUTPUT CONVENTION:
 #   stdout: KEY=VALUE env block (for shell eval) — sets ANTHROPIC_BASE_URL, ANTHROPIC_API_KEY, etc.
 #   stderr: all user-facing messages (prompts, warnings, errors)
@@ -12,6 +15,28 @@
 # This separation lets the shell function capture only the env vars while showing messages to the user.
 
 set -euo pipefail
+
+# Check if being run from source location (not installed)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$SCRIPT_DIR" == */bin ]] && [[ -f "$SCRIPT_DIR/../install.sh" ]]; then
+  cat >&2 <<'EOF'
+╔══════════════════════════════════════════════════╗
+║   ⚠️  This is a source file                      ║
+╚══════════════════════════════════════════════════╝
+
+Please install first:
+  ./install.sh
+
+After installation, use:
+  claudeme                 # Auto-detect endpoint
+  claudeme list            # List endpoints
+  claudeme <profile>       # Use named profile
+  claudeme -c              # Continue last session
+
+See README.md for full documentation.
+EOF
+  exit 1
+fi
 
 # Storage locations for profiles and session history
 PROFILES_FILE="$HOME/.claudeme/profiles.json"   # Named cloud endpoints (gcp, aws, etc.)
