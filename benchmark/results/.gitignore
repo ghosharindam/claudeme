@@ -1,0 +1,8 @@
+# Ignore all benchmark result files
+*.csv
+*.json
+*.log
+
+# But keep example/baseline results
+!baseline/
+baseline/*.csv
