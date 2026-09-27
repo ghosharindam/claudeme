@@ -1,0 +1,204 @@
+# Model Catalog - Coding models for Claude Code
+# Location: ~/.claudeme/model-catalog.yaml
+# Updated: 2026-09-27
+#
+# This catalog defines:
+# - Available coding models and their metadata
+# - Memory requirements for each model version
+# - Quality and speed scores
+# - Memory tier thresholds for recommendations
+#
+# User can edit this file to customize recommendations
+# Update with: claudeme update-catalog (future feature)
+
+version: "1.0"
+
+# Coding model catalog
+# Organized by model family, then version
+coding_models:
+  qwen2.5-coder:
+    description: "Qwen 2.5 Coder - Latest coding model from Alibaba"
+    provider: "Alibaba Cloud"
+    architecture: "Qwen2.5"
+    recommended: true
+    homepage: "https://qwenlm.github.io/"
+
+    versions:
+      "14b":
+        ram_gb: 8.5
+        vram_gb: 8.5
+        quality_score: 10
+        speed_score: 7
+        recommended_for: "systems with >16GB available RAM"
+        quantization: "Q4_K_M"
+        use_case: "Best coding quality, slower responses"
+
+      "7b":
+        ram_gb: 4.3
+        vram_gb: 4.3
+        quality_score: 8
+        speed_score: 9
+        recommended_for: "most systems (balanced quality/speed)"
+        quantization: "Q4_K_M"
+        use_case: "Balanced - recommended for most users"
+
+      "3b":
+        ram_gb: 2.1
+        vram_gb: 2.1
+        quality_score: 6
+        speed_score: 10
+        recommended_for: "low-memory systems (8-12GB total)"
+        quantization: "Q4_K_M"
+        use_case: "Fast responses, good for simple tasks"
+
+      "1.5b":
+        ram_gb: 1.2
+        vram_gb: 1.2
+        quality_score: 5
+        speed_score: 10
+        recommended_for: "very constrained systems (<8GB total)"
+        quantization: "Q4_K_M"
+        use_case: "Minimal resource usage, basic coding"
+
+  deepseek-coder-v2:
+    description: "DeepSeek Coder V2 - Strong coding model"
+    provider: "DeepSeek"
+    architecture: "DeepSeek-V2"
+    recommended: true
+    homepage: "https://github.com/deepseek-ai/DeepSeek-Coder"
+
+    versions:
+      "16b":
+        ram_gb: 10.2
+        vram_gb: 10.2
+        quality_score: 9
+        speed_score: 7
+        recommended_for: "systems with >16GB available RAM"
+        quantization: "Q4_K_M"
+        use_case: "Excellent code generation, good reasoning"
+
+      "6.7b":
+        ram_gb: 4.5
+        vram_gb: 4.5
+        quality_score: 8
+        speed_score: 8
+        recommended_for: "most systems (similar to qwen2.5-coder:7b)"
+        quantization: "Q4_K_M"
+        use_case: "Alternative to qwen2.5-coder:7b"
+
+  codellama:
+    description: "Meta CodeLlama - Mature, stable coding model"
+    provider: "Meta"
+    architecture: "Llama2"
+    recommended: false  # Older, prefer qwen2.5-coder or deepseek
+    homepage: "https://github.com/facebookresearch/codellama"
+
+    versions:
+      "34b":
+        ram_gb: 20.5
+        vram_gb: 20.5
+        quality_score: 9
+        speed_score: 5
+        recommended_for: "high-memory systems only (>32GB total)"
+        quantization: "Q4_K_M"
+        use_case: "Legacy, large model - prefer newer alternatives"
+
+      "13b":
+        ram_gb: 7.8
+        vram_gb: 7.8
+        quality_score: 7
+        speed_score: 7
+        recommended_for: "systems with >12GB available RAM"
+        quantization: "Q4_K_M"
+        use_case: "Legacy - prefer qwen2.5-coder:7b or deepseek:6.7b"
+
+      "7b":
+        ram_gb: 4.3
+        vram_gb: 4.3
+        quality_score: 6
+        speed_score: 8
+        recommended_for: "legacy compatibility only"
+        quantization: "Q4_K_M"
+        use_case: "Outdated - use qwen2.5-coder:7b instead"
+
+  starcoder2:
+    description: "BigCode StarCoder2 - Multilingual coding"
+    provider: "BigCode / Hugging Face"
+    architecture: "StarCoder2"
+    recommended: false
+    homepage: "https://github.com/bigcode-project/starcoder2"
+
+    versions:
+      "15b":
+        ram_gb: 9.5
+        vram_gb: 9.5
+        quality_score: 8
+        speed_score: 6
+        recommended_for: "systems with >16GB available RAM"
+        quantization: "Q4_K_M"
+        use_case: "Alternative, good for multiple languages"
+
+# Models to exclude (patterns)
+# These models are NOT suitable for coding work
+excluded_patterns:
+  - "vision"        # Vision models (llama3.2-vision, llava)
+  - "llava"         # Vision models
+  - "embed"         # Embedding models
+  - "image"         # Image generation models
+  - "xl"            # Extra large diffusion models
+  - "sdxl"          # Stable Diffusion
+  - "whisper"       # Speech recognition
+
+# Memory tier thresholds
+# Used to recommend appropriate model sizes based on available RAM
+memory_thresholds:
+  high:
+    min_available_gb: 16
+    recommended_model_size: "14b"
+    allow_sizes: ["14b", "16b", "7b", "6.7b", "3b", "1.5b"]
+    description: "High memory - can run larger models"
+
+  medium:
+    min_available_gb: 8
+    max_available_gb: 16
+    recommended_model_size: "7b"
+    allow_sizes: ["7b", "6.7b", "3b", "1.5b"]
+    description: "Medium memory - balanced models recommended"
+
+  low:
+    min_available_gb: 4
+    max_available_gb: 8
+    recommended_model_size: "3b"
+    allow_sizes: ["3b", "1.5b"]
+    description: "Low memory - small models only"
+
+  very_low:
+    max_available_gb: 4
+    action: "suggest_cleanup_or_cloud"
+    description: "Very low memory - cleanup or cloud recommended"
+
+# Safety margins
+# Prevent OOM and ensure system stability
+safety:
+  min_free_after_load_gb: 2      # Always keep at least 2GB free
+  max_memory_usage_pct: 80        # Don't use more than 80% of total RAM
+  warn_swap_usage_mb: 100         # Warn if swap usage exceeds 100MB
+
+# Ollama-specific settings
+ollama:
+  default_pull_flags: []           # Additional flags for ollama pull
+  auto_load_timeout_sec: 30        # Max time to wait for model to load
+
+# LiteLLM settings
+litellm:
+  default_port: 4000
+  default_host: "0.0.0.0"
+  startup_timeout_sec: 5           # Wait for LiteLLM to be ready
+  extra_args: []                   # Additional CLI flags
+
+# Display settings (for UI)
+ui:
+  max_models_shown: 5              # Show top 5 recommendations
+  show_quality_bars: true          # Show █████ bars for quality/speed
+  highlight_loaded: true           # Highlight already-loaded models
+  show_ram_percentage: true        # Show RAM usage as percentage

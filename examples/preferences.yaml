@@ -1,0 +1,121 @@
+# User Preferences for claudeme
+# Location: ~/.claudeme/preferences.yaml
+#
+# This file controls claudeme behavior and can be edited by hand
+# or via 'claudeme config' commands
+#
+# All settings have sensible defaults - only change what you need
+
+version: "1.0"
+
+# Auto-start behavior for LiteLLM
+auto_start:
+  enabled: true                    # Enable auto-start of LiteLLM when needed
+  remember_choice: true            # Remember yes/no decision (don't ask every time)
+  last_decision: null              # User's last choice: "yes", "no", or null (ask)
+
+  # When to auto-start
+  conditions:
+    - ollama_running_no_litellm    # Ollama running but LiteLLM not
+    - no_direct_endpoint           # No llama-server, need LiteLLM for Ollama
+
+  # What to ask
+  prompt_style: "interactive"      # "interactive" or "silent" (for scripts)
+
+# Model preferences (user's priority order)
+# These override catalog defaults
+# List your preferred models in order - first available will be used
+preferred_models:
+  - "qwen2.5-coder:7b"             # Default: balanced quality/speed
+  - "deepseek-coder-v2:6.7b"       # Alternative if qwen not available
+  - "qwen2.5-coder:3b"             # Fallback for low memory
+
+# LiteLLM proxy settings
+litellm:
+  port: 4000                       # Port to run LiteLLM on
+  host: "0.0.0.0"                  # Listen on all interfaces
+  auto_restart: false              # Restart if crashes (experimental)
+  keep_running: true               # Keep running after claudeme exits
+
+  # Additional CLI arguments
+  # Example: ["--drop_params", "--debug"]
+  extra_args: []
+
+# Memory management
+memory:
+  check_before_load: true          # Always check memory before loading models
+  auto_cleanup: "ask"              # "yes", "no", or "ask"
+  prefer_loaded: true              # Always prefer already-loaded models
+  warn_threshold_pct: 80           # Warn if memory usage >80% after load
+
+  # Integration with cleanup-advisor
+  cleanup_integration:
+    enabled: true                  # Use cleanup-advisor when memory low
+    auto_show_recommendations: true # Show what to kill automatically
+    safe_processes:                # Never suggest killing these
+      - "claude"
+      - "Claude"
+      - "iTerm2"
+
+# Session management
+sessions:
+  auto_resume: true                # Auto-resume with -c flag
+  save_on_exit: true               # Save last-used endpoint per directory
+  history_limit: 100               # Keep last 100 session entries
+
+  # Session file location
+  file: "~/.claudeme/sessions.json"
+
+# UI preferences
+ui:
+  show_memory_status: true         # Show memory in selection UI
+  highlight_loaded: true           # Highlight already-loaded models
+  show_quality_scores: true        # Show quality/speed scores
+  verbose: false                   # Verbose output (for debugging)
+
+  # Color/formatting (if terminal supports)
+  use_colors: true
+  use_emoji: true
+
+  # Display style
+  selection_style: "numbered"      # "numbered" or "arrow-keys"
+
+# Notifications
+notifications:
+  model_loaded: true               # Notify when model finishes loading
+  litellm_started: true            # Notify when LiteLLM starts
+  low_memory_warning: true         # Warn when memory getting low
+
+# Advanced settings
+advanced:
+  # Catalog updates
+  catalog_update:
+    auto_check: false              # Check for catalog updates on startup
+    update_url: "https://claudeme.dev/model-catalog.yaml"
+
+  # Telemetry (future)
+  telemetry:
+    enabled: false                 # Send anonymous usage data (helps development)
+    endpoint: null
+
+  # Debug
+  debug:
+    log_level: "info"              # "debug", "info", "warn", "error"
+    log_file: null                 # Path to log file (null = no logging)
+
+# Cloud fallback (future feature)
+cloud:
+  enabled: false                   # Enable cloud endpoint suggestions
+  prefer_local: true               # Always try local first
+
+  # Auto-suggest cloud when
+  suggest_when:
+    - insufficient_memory          # Not enough RAM for local models
+    - no_coding_models             # No suitable models installed
+    - user_requested               # User explicitly asks
+
+# Per-project overrides (future feature)
+# Allow different preferences per project
+project_overrides:
+  enabled: false                   # Enable per-project settings
+  config_file: ".claudeme.yaml"    # Look for this file in project root
