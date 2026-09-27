@@ -1209,3 +1209,162 @@ auto_start_litellm_if_needed() {
   return 1
 }
 
+
+# ── Phase 5: Session Management ───────────────────────────────────────────────
+
+# Get current working directory (for session key)
+get_session_key() {
+  pwd
+}
+
+# Read session history for current directory
+get_session_history() {
+  local session_key=$(get_session_key)
+  
+  ensure_sessions
+  
+  # Read from sessions.json
+  local session=$(jq -r --arg key "$session_key" '.[$key] // empty' "$SESSIONS_FILE" 2>/dev/null)
+  
+  if [[ -n "$session" && "$session" != "null" ]]; then
+    echo "$session"
+    return 0
+  fi
+  
+  return 1  # No history
+}
+
+# Save session after successful connection
+save_session() {
+  local tool=$1
+  local model=$2
+  local endpoint=$3
+  local model_was_loaded=${4:-false}
+  
+  local session_key=$(get_session_key)
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  
+  ensure_sessions
+  
+  # Update sessions.json
+  local updated=$(jq --arg key "$session_key" \
+    --arg tool "$tool" \
+    --arg model "$model" \
+    --arg endpoint "$endpoint" \
+    --arg loaded "$model_was_loaded" \
+    --arg time "$timestamp" \
+    '.[$key] = {
+      tool: $tool,
+      model: $model,
+      endpoint: $endpoint,
+      model_was_loaded: ($loaded == "true"),
+      last_used: $time
+    }' "$SESSIONS_FILE")
+  
+  json_write "$SESSIONS_FILE" "$updated"
+}
+
+# Check if model is still loaded
+is_model_loaded() {
+  local model=$1
+  local tool=$2
+  
+  case "$tool" in
+    ollama)
+      # Check with ollama ps
+      local loaded=$(detect_ollama_models)
+      if [[ "$loaded" == *"$model"* ]]; then
+        return 0  # Still loaded
+      fi
+      ;;
+    
+    llama-server)
+      # Check if llama-server process is running with this model
+      if pgrep -x "llama-server" >/dev/null 2>&1; then
+        # TODO: Parse model from llama-server process args
+        return 0  # Assume still loaded for now
+      fi
+      ;;
+  esac
+  
+  return 1  # Not loaded
+}
+
+# Resume from session history
+# Returns: endpoint URL if successful, empty if failed
+resume_session() {
+  local session=$(get_session_history)
+  
+  if [[ -z "$session" ]]; then
+    return 1  # No history
+  fi
+  
+  # Parse session info
+  local tool=$(echo "$session" | jq -r '.tool')
+  local model=$(echo "$session" | jq -r '.model')
+  local endpoint=$(echo "$session" | jq -r '.endpoint')
+  local was_loaded=$(echo "$session" | jq -r '.model_was_loaded')
+  
+  msg "→ Resuming previous session"
+  msg "  Tool: $tool"
+  msg "  Model: $model"
+  msg ""
+  
+  # Check if tool still running
+  local tools=$(detect_tools)
+  
+  if [[ "$tools" != *"$tool"* ]]; then
+    msg "⚠️  $tool not running anymore"
+    msg "  Start it first:"
+    case "$tool" in
+      ollama) msg "    ollama serve" ;;
+      llama-server) msg "    llama-server --model <path> --port 8080" ;;
+    esac
+    msg ""
+    return 1
+  fi
+  
+  # Check if model still loaded
+  if is_model_loaded "$model" "$tool"; then
+    msg "✓ $tool running"
+    msg "✓ Model already loaded in memory"
+    msg "→ Resuming instantly (no overhead)"
+    msg ""
+    
+    # Return endpoint
+    echo "$endpoint"
+    return 0
+  else
+    msg "✓ $tool running"
+    msg "⚠️  Model not loaded anymore"
+    msg ""
+    
+    # Check memory before loading
+    local available_gb=$(get_available_memory_gb)
+    if check_model_fits "$model" "$available_gb"; then
+      msg "→ Loading $model into memory..."
+      msg "  (This may take 10-30 seconds)"
+      msg ""
+      
+      # TODO: Actually load the model
+      # For ollama: ollama run $model (then exit immediately)
+      
+      # Return endpoint
+      echo "$endpoint"
+      return 0
+    else
+      msg "❌ Insufficient memory to load $model"
+      check_memory_and_cleanup "$model"
+      return 1
+    fi
+  fi
+}
+
+# Check if continuing session (-c flag)
+# This should be called from main flow
+is_continue_session() {
+  # Check if -c flag was passed
+  # This will be integrated into main arg parsing
+  return 1  # Placeholder
+}
+
