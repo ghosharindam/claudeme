@@ -874,3 +874,132 @@ get_model_ram() {
   fi
 }
 
+
+# ── Phase 3: Smart Selection ──────────────────────────────────────────────────
+
+# Get recommended models for memory tier
+# Returns: newline-separated list of model names
+get_recommended_models() {
+  local tier=$1
+  
+  # Read recommended size for this tier from config
+  local rec_size=$(get_config "$MODEL_CATALOG" ".memory_thresholds.$tier.recommended_model_size")
+  
+  if [[ -z "$rec_size" || "$rec_size" == "null" ]]; then
+    # Fallback recommendations
+    case "$tier" in
+      high) rec_size="14b" ;;
+      medium) rec_size="7b" ;;
+      low) rec_size="3b" ;;
+      very_low) rec_size="1.5b" ;;
+    esac
+  fi
+  
+  # Get user's preferred models from config
+  local preferred=$(get_config "$PREFERENCES" ".preferred_models[]")
+  
+  # Get all coding models from catalog that match allowed sizes
+  local allowed_sizes=$(get_config "$MODEL_CATALOG" ".memory_thresholds.$tier.allow_sizes[]")
+  
+  # For now, return user preferences that match tier
+  # TODO: Filter by allowed_sizes and add catalog models
+  echo "$preferred"
+}
+
+# Check if model will fit in available memory
+check_model_fits() {
+  local model=$1
+  local available_gb=$2
+  
+  # Get model RAM requirement
+  local model_ram=$(get_model_ram "$model")
+  
+  # Get safety margin from config
+  local min_free=$(get_config "$MODEL_CATALOG" ".safety.min_free_after_load_gb")
+  min_free=${min_free:-2}  # Default 2GB
+  
+  local needed=$(echo "$model_ram + $min_free" | bc)
+  
+  if (( $(echo "$needed <= $available_gb" | bc -l) )); then
+    return 0  # Fits
+  else
+    return 1  # Doesn't fit
+  fi
+}
+
+# Show memory status (for UI)
+show_memory_status() {
+  local available_gb=$(get_available_memory_gb)
+  local tier=$(get_memory_tier "$available_gb")
+  
+  msg "Memory Status:"
+  msg "  Available: ${available_gb}GB"
+  msg "  Tier: $tier"
+  msg ""
+}
+
+# Show loaded models (highlighted in UI)
+show_loaded_models() {
+  local loaded=$(detect_ollama_models)
+  
+  if [[ -n "$loaded" ]]; then
+    msg "Already loaded (instant, no RAM needed):"
+    while IFS= read -r model; do
+      if [[ -n "$model" ]]; then
+        local ram=$(get_model_ram "$model")
+        msg "  ✓ $model (using ${ram}GB)"
+      fi
+    done <<< "$loaded"
+    msg ""
+  fi
+}
+
+# Show available coding models with recommendations
+show_available_models() {
+  local available_gb=$(get_available_memory_gb)
+  local tier=$(get_memory_tier "$available_gb")
+  
+  msg "Recommended coding models:"
+  
+  # Get recommendations for this tier
+  local recommendations=$(get_recommended_models "$tier")
+  
+  while IFS= read -r model; do
+    if [[ -n "$model" && "$model" != "null" ]]; then
+      # Check if it's a coding model
+      if is_coding_model "$model"; then
+        local ram=$(get_model_ram "$model")
+        
+        # Check if it fits
+        if check_model_fits "$model" "$available_gb"; then
+          msg "  • $model - ${ram}GB RAM"
+        else
+          msg "  • $model - ${ram}GB RAM ⚠️  Insufficient memory"
+        fi
+      fi
+    fi
+  done <<< "$recommendations"
+  
+  msg ""
+}
+
+# Interactive model selection (future)
+# For now, just use first recommended that fits
+select_best_model() {
+  local available_gb=$(get_available_memory_gb)
+  local tier=$(get_memory_tier "$available_gb")
+  local recommendations=$(get_recommended_models "$tier")
+  
+  # Return first coding model that fits
+  while IFS= read -r model; do
+    if [[ -n "$model" && "$model" != "null" ]]; then
+      if is_coding_model "$model" && check_model_fits "$model" "$available_gb"; then
+        echo "$model"
+        return 0
+      fi
+    fi
+  done <<< "$recommendations"
+  
+  return 1  # No suitable model found
+}
+
