@@ -113,8 +113,8 @@ resolve_auth() {
   case "$auth" in
     none)
       # Local servers or public endpoints — no real auth needed
-      echo "ANTHROPIC_BASE_URL=$url"
-      echo "ANTHROPIC_API_KEY=local"  # Placeholder value (some servers require any non-empty key)
+      echo "export ANTHROPIC_BASE_URL=$url"
+      echo "export ANTHROPIC_API_KEY=local"  # Placeholder value (some servers require any non-empty key)
       ;;
 
     api-key)
@@ -133,8 +133,8 @@ resolve_auth() {
       else
         die "profile has auth=api-key but no 'key' or 'key_env' configured"
       fi
-      echo "ANTHROPIC_BASE_URL=$url"
-      echo "ANTHROPIC_API_KEY=$key"
+      echo "export ANTHROPIC_BASE_URL=$url"
+      echo "export ANTHROPIC_API_KEY=$key"
       ;;
 
     gcp-adc)
@@ -143,16 +143,16 @@ resolve_auth() {
       command -v gcloud &>/dev/null || die "gcloud not found — install Google Cloud SDK"
       local token; token=$(gcloud auth print-access-token --quiet 2>/dev/null) || true
       [[ -z "$token" ]] && die "gcloud auth failed — run: gcloud auth login"
-      echo "ANTHROPIC_BASE_URL=$url"
-      echo "ANTHROPIC_API_KEY=$token"
+      echo "export ANTHROPIC_BASE_URL=$url"
+      echo "export ANTHROPIC_API_KEY=$token"
       ;;
 
     aws)
       # AWS session token — expects AWS_SESSION_TOKEN to be set by AWS CLI or similar
       local token="${AWS_SESSION_TOKEN:-}"
       [[ -z "$token" ]] && die "AWS_SESSION_TOKEN is not set — configure AWS credentials first"
-      echo "ANTHROPIC_BASE_URL=$url"
-      echo "ANTHROPIC_API_KEY=$token"
+      echo "export ANTHROPIC_BASE_URL=$url"
+      echo "export ANTHROPIC_API_KEY=$token"
       ;;
 
     *)
@@ -233,13 +233,13 @@ emit_local_from_probes() {
   if [[ -f "$tmp/llama" ]]; then
     # llama.cpp detected — connect directly
     # Assumes it's running with --api-type anthropic flag
-    echo "ANTHROPIC_BASE_URL=http://localhost:8080"
-    echo "ANTHROPIC_API_KEY=local"
+    echo "export ANTHROPIC_BASE_URL=http://localhost:8080"
+    echo "export ANTHROPIC_API_KEY=local"
 
   elif [[ -f "$tmp/litellm" ]]; then
     # LiteLLM detected — use it (might be fronting Ollama, OpenAI, etc.)
-    echo "ANTHROPIC_BASE_URL=http://localhost:4000"
-    echo "ANTHROPIC_API_KEY=local"
+    echo "export ANTHROPIC_BASE_URL=http://localhost:4000"
+    echo "export ANTHROPIC_API_KEY=local"
 
   elif [[ -f "$tmp/ollama" || -f "$tmp/edge" ]]; then
     # Ollama or Edge Gallery detected, but NO LiteLLM bridge
@@ -1474,8 +1474,8 @@ cmd_resolve_auto() {
   local kind="${opts_kind[$chosen]}"
 
   if [[ "$kind" == "local" ]]; then
-    echo "ANTHROPIC_BASE_URL=$url"
-    echo "ANTHROPIC_API_KEY=local"
+    echo "export ANTHROPIC_BASE_URL=$url"
+    echo "export ANTHROPIC_API_KEY=local"
   else
     local pname="${kind#profile:}"
     local profile_json; profile_json=$(profile_get "$pname")
@@ -1592,7 +1592,7 @@ cmd_resolve() {
       if [[ -f .claude/settings.json ]]; then
         local selected_model=$(jq -r '.model // empty' .claude/settings.json 2>/dev/null)
         if [[ -n "$selected_model" && "$selected_model" != "null" ]]; then
-          env_block+=$'\n'"ANTHROPIC_MODEL=$selected_model"
+          env_block+=$'\n'"export ANTHROPIC_MODEL=$selected_model"
         fi
       fi
     fi
@@ -1626,7 +1626,7 @@ cmd_resolve() {
       if [[ -f .claude/settings.json ]]; then
         local selected_model=$(jq -r '.model // empty' .claude/settings.json 2>/dev/null)
         if [[ -n "$selected_model" && "$selected_model" != "null" ]]; then
-          env_block+=$'\n'"ANTHROPIC_MODEL=$selected_model"
+          env_block+=$'\n'"export ANTHROPIC_MODEL=$selected_model"
         fi
       fi
     fi
