@@ -14,6 +14,28 @@ claudeme -c       # continue last session on the same endpoint you used last tim
 
 ---
 
+## Quick Start (No Installation)
+
+For one-time testing or quick usage without installation:
+
+```bash
+# Download and run
+curl -O https://raw.githubusercontent.com/ghosharindam/claudeme/main/claudeme-quick
+chmod +x claudeme-quick
+./claudeme-quick --auto-start
+```
+
+Done! See [QUICK-START.md](QUICK-START.md) for details.
+
+**When to use:**
+- 🧪 Testing local models
+- 🚀 CI/CD environments  
+- ⚡ Quick one-off usage
+
+**For daily use, install the full system below** ↓
+
+---
+
 ## Install
 
 ### Prerequisites

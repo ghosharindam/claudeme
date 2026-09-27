@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# claudeme-quick - Simple wrapper for local model usage (no installation needed)
+#
+# Usage:
+#   ./claudeme-quick                    # Use default qwen2.5-coder:7b
+#   ./claudeme-quick deepseek-coder:6.7b  # Use specific model
+#   ./claudeme-quick -c                 # Continue last session
+#
+# Requirements:
+#   - Ollama running (ollama serve)
+#   - LiteLLM running on port 4000:
+#       litellm --model ollama/qwen2.5-coder:7b --port 4000
+
+set -euo pipefail
+
+# Default configuration
+DEFAULT_MODEL="ollama/qwen2.5-coder:7b"
+LITELLM_PORT="${LITELLM_PORT:-4000}"
+OLLAMA_PORT="${OLLAMA_PORT:-11434}"
+
+# Parse arguments
+MODEL="$DEFAULT_MODEL"
+CLAUDE_ARGS=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c|--continue)
+      CLAUDE_ARGS+=("$1")
+      shift
+      ;;
+    -h|--help)
+      cat << 'HELP'
+claudeme-quick - Quick local model wrapper (no installation)
+
+Usage:
+  ./claudeme-quick                      # Default model
+  ./claudeme-quick <model>              # Specific model
+  ./claudeme-quick <model> -c           # Continue session with model
+
+Examples:
+  ./claudeme-quick
+  ./claudeme-quick qwen2.5-coder:7b
+  ./claudeme-quick deepseek-coder:6.7b -c
+
+Environment Variables:
+  LITELLM_PORT    LiteLLM port (default: 4000)
+  OLLAMA_PORT     Ollama port (default: 11434)
+
+Requirements:
+  1. Ollama running: ollama serve
+  2. LiteLLM running:
+     litellm --model ollama/qwen2.5-coder:7b --port 4000
+
+Or use auto-start:
+  ./claudeme-quick --auto-start
+
+This will check if LiteLLM is running and start it if needed.
+HELP
+      exit 0
+      ;;
+    --auto-start)
+      # Check if LiteLLM is running, start if not
+      if ! lsof -i ":$LITELLM_PORT" >/dev/null 2>&1; then
+        echo "→ Starting LiteLLM on :$LITELLM_PORT..." >&2
+        nohup litellm --model "$DEFAULT_MODEL" --port "$LITELLM_PORT" > /tmp/litellm-quick.log 2>&1 &
+
+        # Wait for LiteLLM to be ready
+        for i in {1..10}; do
+          if lsof -i ":$LITELLM_PORT" >/dev/null 2>&1; then
+            echo "✅ LiteLLM started" >&2
+            sleep 1
+            break
+          fi
+          sleep 1
+        done
+      else
+        echo "✓ LiteLLM already running on :$LITELLM_PORT" >&2
+      fi
+      shift
+      ;;
+    -*)
+      CLAUDE_ARGS+=("$1")
+      shift
+      ;;
+    *)
+      # First non-flag argument is the model
+      if [[ "$1" != ollama/* ]]; then
+        MODEL="ollama/$1"
+      else
+        MODEL="$1"
+      fi
+      shift
+      ;;
+  esac
+done
+
+# Verify prerequisites
+if ! command -v claude &>/dev/null; then
+  echo "❌ claude CLI not found" >&2
+  echo "   Install from: https://docs.anthropic.com/claude-code" >&2
+  exit 1
+fi
+
+# Check if Ollama is running
+if ! pgrep -x ollama >/dev/null 2>&1; then
+  echo "❌ Ollama not running" >&2
+  echo "   Start with: ollama serve" >&2
+  exit 1
+fi
+
+# Check if LiteLLM is running
+if ! lsof -i ":$LITELLM_PORT" >/dev/null 2>&1; then
+  echo "❌ LiteLLM not running on :$LITELLM_PORT" >&2
+  echo "" >&2
+  echo "Start with:" >&2
+  echo "  litellm --model $MODEL --port $LITELLM_PORT" >&2
+  echo "" >&2
+  echo "Or run with --auto-start:" >&2
+  echo "  $0 --auto-start" >&2
+  exit 1
+fi
+
+# Set environment and exec Claude
+export ANTHROPIC_BASE_URL="http://localhost:$LITELLM_PORT"
+export ANTHROPIC_API_KEY="local"
+export ANTHROPIC_MODEL="$MODEL"
+
+echo "→ Using local model: $MODEL" >&2
+echo "  Endpoint: http://localhost:$LITELLM_PORT" >&2
+echo "" >&2
+
+exec claude "${CLAUDE_ARGS[@]}"
