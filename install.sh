@@ -161,6 +161,13 @@ if [[ ! -d "$HOME/.local/bin" ]]; then
   mkdir -p "$HOME/.local/bin"
 fi
 
+# Ensure ~/.claudeme config directory exists
+CONFIG_DIR="$HOME/.claudeme"
+if [[ ! -d "$CONFIG_DIR" ]]; then
+  mkdir -p "$CONFIG_DIR"
+  check "Created $CONFIG_DIR"
+fi
+
 # 2. Copy scripts to ~/.local/bin
 # IDEMPOTENCY: Only copy if missing or different (uses diff to check)
 echo ""
@@ -220,7 +227,56 @@ else
   warn "benchmark-run source not found (skipping)"
 fi
 
-# 3. Check and install dependencies
+# 3. Install config files
+# Copy default configs to ~/.claudeme/ if they don't exist
+echo ""
+msg "Installing config files..."
+
+# model-catalog.yaml
+CATALOG_SRC="$SCRIPT_DIR/examples/model-catalog.yaml"
+CATALOG_DEST="$CONFIG_DIR/model-catalog.yaml"
+
+if [[ -f "$CATALOG_SRC" ]]; then
+  if [[ ! -f "$CATALOG_DEST" ]]; then
+    cp "$CATALOG_SRC" "$CATALOG_DEST"
+    check "Installed model-catalog.yaml"
+  else
+    # Config exists - check if update needed
+    if ! diff -q "$CATALOG_SRC" "$CATALOG_DEST" &>/dev/null; then
+      msg "model-catalog.yaml exists (keeping your version)"
+      msg "  New version available at: examples/model-catalog.yaml"
+    else
+      check "model-catalog.yaml up to date"
+    fi
+  fi
+else
+  warn "model-catalog.yaml source not found (skipping)"
+fi
+
+# preferences.yaml
+PREFS_SRC="$SCRIPT_DIR/examples/preferences.yaml"
+PREFS_DEST="$CONFIG_DIR/preferences.yaml"
+
+if [[ -f "$PREFS_SRC" ]]; then
+  if [[ ! -f "$PREFS_DEST" ]]; then
+    cp "$PREFS_SRC" "$PREFS_DEST"
+    check "Installed preferences.yaml"
+  else
+    # Preferences exist - never overwrite (user customized)
+    check "preferences.yaml exists (keeping your settings)"
+  fi
+else
+  warn "preferences.yaml source not found (skipping)"
+fi
+
+# sessions.json
+SESSIONS_FILE="$CONFIG_DIR/sessions.json"
+if [[ ! -f "$SESSIONS_FILE" ]]; then
+  echo '{}' > "$SESSIONS_FILE"
+  check "Created sessions.json"
+fi
+
+# 4. Check and install dependencies
 # Each dependency is checked before installing (idempotent)
 echo ""
 msg "Checking dependencies..."
