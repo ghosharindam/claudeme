@@ -177,3 +177,60 @@ main() {
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
   main "$@"
 fi
+
+# ── Aggregated App RAM Usage ───────────────────────────────────────────────────
+
+show_app_ram_totals() {
+  echo "# Application RAM Totals (multiple processes grouped):"
+  echo "#"
+  
+  # Group by app name and sum RAM
+  ps aux | awk '{cmd=$11; gsub(/.*\//, "", cmd); gsub(/ Helper.*/, "", cmd); ram=int($6/1024); print cmd"|"ram}' | \
+  awk -F'|' '
+    # Map helpers to parent apps
+    {
+      app = $1
+      if (app ~ /^[Cc]ode/) app = "Visual Studio Code"
+      if (app ~ /^[Cc]hrome/) app = "Google Chrome"
+      if (app ~ /^[Bb]rave/) app = "Brave Browser"
+      if (app ~ /^[Ss]lack/) app = "Slack"
+      if (app ~ /^[Dd]iscord/) app = "Discord"
+      if (app ~ /^[Tt]eams/) app = "Microsoft Teams"
+      
+      ram[app] += $2
+      count[app]++
+    }
+    END {
+      for (app in ram) {
+        if (ram[app] > 200) {  # Only show apps using >200MB total
+          printf "%s|%d|%d\n", app, count[app], ram[app]
+        }
+      }
+    }
+  ' | sort -t'|' -k3 -rn | head -10 | \
+  while IFS='|' read -r app proc_count total_mb; do
+    local gb=$(echo "scale=1; $total_mb / 1024" | bc)
+    printf "# - %-30s %2d procs  %5dMB  (%.1fGB)\n" "$app" "$proc_count" "$total_mb" "$gb"
+    
+    # Suggest kill command
+    case "$app" in
+      "Visual Studio Code")
+        echo "#   Kill: code --stop  or  pkill -x 'Code'"
+        ;;
+      "Google Chrome"|"Brave Browser"|"Slack"|"Discord"|"Microsoft Teams")
+        echo "#   Kill: pkill -x '$app'"
+        ;;
+    esac
+  done
+  
+  echo "#"
+  echo "# ⚠️  VSCode example: 8x 'Code Helper' processes = 5GB total!"
+  echo "#"
+}
+
+# Add to main output
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  # Called directly - show aggregated view
+  echo ""
+  show_app_ram_totals
+fi
