@@ -41,13 +41,26 @@ get_memory_info() {
   fi
 }
 
-get_cpu_load() {
+get_cpu_info() {
   if [[ "$(uname -s)" == "Darwin" ]]; then
-    # macOS - 5 minute load average
-    sysctl -n vm.loadavg | awk '{print $3}'
+    # macOS
+    local cores=$(sysctl -n hw.ncpu)
+    local load_avg=$(sysctl -n vm.loadavg | awk '{print $3}')
+    local load_per_core=$(echo "scale=2; $load_avg / $cores" | bc)
+
+    # Get actual CPU usage (100 - idle)
+    local idle=$(top -l 1 | grep "CPU usage" | awk '{print $7}' | tr -d '%')
+    local used=$((100 - ${idle%.*}))
+
+    echo "cores=$cores load=$load_avg load_per_core=$load_per_core usage_pct=$used"
   else
     # Linux
-    uptime | awk -F'load average:' '{print $2}' | awk '{print $2}' | tr -d ','
+    local cores=$(nproc)
+    local load_avg=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $2}' | tr -d ',')
+    local load_per_core=$(echo "scale=2; $load_avg / $cores" | bc)
+    local used=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | tr -d '%')
+
+    echo "cores=$cores load=$load_avg load_per_core=$load_per_core usage_pct=${used%.*}"
   fi
 }
 
@@ -140,9 +153,9 @@ detect_bias() {
   fi
 
   # Check CPU load
-  local cpu_load=$(get_cpu_load)
-  if (( $(echo "$cpu_load > 2.0" | bc -l 2>/dev/null || echo 0) )); then
-    warnings+=("High CPU load (${cpu_load}) - system under stress")
+  local cpu_load=$(get_cpu_info)
+  if (( $(echo "$usage_pct -gt 50" | bc -l 2>/dev/null || echo 0) )); then
+    warnings+=("High CPU usage (${usage_pct}%) - system under stress")
   fi
 
   # Print warnings
@@ -195,7 +208,11 @@ capture_system_state() {
     echo "#"
 
     # CPU
-    echo "# CPU Load (5min avg): $(get_cpu_load)"
+    eval $(get_cpu_info)
+    echo "# CPU:"
+    echo "# - Cores: $cores"
+    echo "# - Usage: ${usage_pct}% (idle: $((100 - usage_pct))%)"
+    echo "# - Load Average: $load_avg (per-core: $load_per_core)"
     echo "#"
 
     # Model servers
@@ -223,10 +240,69 @@ capture_system_state() {
 # ── Export Functions ───────────────────────────────────────────────────────────
 
 export -f get_memory_info
-export -f get_cpu_load
+export -f get_cpu_info
 export -f detect_running_servers
 export -f detect_heavy_processes
 export -f detect_gpu_usage
 export -f detect_bias
 export -f print_recommendations
 export -f capture_system_state
+
+# ── Model Memory Requirements ──────────────────────────────────────────────────
+
+estimate_model_ram() {
+  local model_name="${1:-unknown}"
+  local ram_gb=0
+  
+  # Extract size from model name (7b, 13b, 70b, etc.)
+  if [[ "$model_name" =~ ([0-9]+)[bB] ]]; then
+    local size_b="${BASH_REMATCH[1]}"
+    
+    # Rough estimates for Q4 quantization (most common)
+    # Q4 ≈ 0.6GB per billion parameters
+    ram_gb=$((size_b * 6 / 10))
+  fi
+  
+  echo "$ram_gb"
+}
+
+get_swap_usage() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS
+    local swap_used=$(sysctl -n vm.swapusage 2>/dev/null | awk '{print $7}' | tr -d 'M')
+    echo "${swap_used:-0}"
+  else
+    # Linux
+    local swap_used=$(free -m | awk '/^Swap:/ {print $3}')
+    echo "${swap_used:-0}"
+  fi
+}
+
+warn_if_insufficient_memory() {
+  local model_name="${1:-}"
+  local model_ram_gb=$(estimate_model_ram "$model_name")
+  
+  eval $(get_memory_info)
+  local swap_mb=$(get_swap_usage)
+  
+  echo "# Model Memory Check:"
+  if [[ -n "$model_name" && $model_ram_gb -gt 0 ]]; then
+    echo "# - Model: $model_name (estimated ${model_ram_gb}GB needed)"
+  fi
+  echo "# - Available RAM: ${available_gb}GB"
+  echo "# - Swap in use: ${swap_mb}MB"
+  
+  if [[ $swap_mb -gt 100 ]]; then
+    echo "# - ⚠️  WARNING: Swap is active (${swap_mb}MB) - performance degraded!"
+  fi
+  
+  if [[ $model_ram_gb -gt 0 && $available_gb -lt $((model_ram_gb + 2)) ]]; then
+    echo "# - ⚠️  WARNING: Low available RAM for model (need ~${model_ram_gb}GB + 2GB buffer)"
+  fi
+  
+  echo "#"
+}
+
+export -f estimate_model_ram
+export -f get_swap_usage
+export -f warn_if_insufficient_memory
