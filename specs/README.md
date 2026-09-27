@@ -77,7 +77,8 @@ Original technical specification (pre-OpenSpec).
 
 | Spec | Format | Status | Phase |
 |------|--------|--------|-------|
-| auto-start-litellm | OpenSpec | Draft | Not started |
+| auto-start-litellm | OpenSpec | Complete | ✅ Implemented |
+| phase3-auto-config | OpenSpec | Draft | Next (Ready to implement) |
 | multi-model | Markdown | Planned | Waiting on benchmarks |
 | behavior | Markdown | Reference | - |
 | tech-spec | Markdown | Legacy | - |

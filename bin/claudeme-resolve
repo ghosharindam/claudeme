@@ -1178,6 +1178,168 @@ resume_session() {
   fi
 }
 
+# ── Phase 3 Enhancement: Auto-Configure Local Models ──────────────────────────
+
+# Get available models from endpoint (Phase 3 Phase 1)
+get_available_models() {
+  local endpoint=$1
+
+  # Query endpoint for available models
+  # Works with LiteLLM, Ollama (via LiteLLM), llama-server
+  if curl -s "$endpoint/v1/models" 2>/dev/null | jq '.data[].id' 2>/dev/null; then
+    return 0
+  fi
+
+  return 1
+}
+
+# Filter to coding models only (Phase 3 Phase 1)
+filter_coding_models() {
+  local endpoint=$1
+
+  local models
+  models=$(get_available_models "$endpoint")
+
+  if [[ -z "$models" ]]; then
+    return 1
+  fi
+
+  # Filter out non-coding models using is_coding_model
+  echo "$models" | while read -r model; do
+    if is_coding_model "$model"; then
+      echo "$model"
+    fi
+  done
+}
+
+# Select model interactively if multiple available (Phase 3 Phase 2)
+select_model_interactive() {
+  local endpoint=$1
+
+  # Get available coding models (use array for portability)
+  local -a models=()
+  while IFS= read -r model; do
+    [[ -n "$model" ]] && models+=("$model")
+  done < <(filter_coding_models "$endpoint")
+
+  local count=${#models[@]}
+
+  if [[ $count -eq 0 ]]; then
+    return 1  # No suitable models
+  fi
+
+  if [[ $count -eq 1 ]]; then
+    # Auto-select single model (strip quotes from jq output)
+    local selected="${models[0]}"
+    selected=$(echo "$selected" | sed 's/^"//;s/"$//')  # Remove quotes
+    msg "✓ Local model detected"
+    msg "  Model: $selected"
+    echo "$selected"
+    return 0
+  fi
+
+  # Multiple models - prompt user
+  msg ""
+  msg "✓ Multiple local models available"
+  msg ""
+
+  # Get model info from catalog for display
+  local i=1
+  for model in "${models[@]}"; do
+    local base_model="${model#ollama/}"  # Remove ollama/ prefix
+    local ram=$(get_model_ram "$base_model" 2>/dev/null || echo "?")
+
+    if [[ "$ram" == "?" ]]; then
+      msg "  $i) $model"
+    else
+      msg "  $i) $model (${ram}GB)"
+    fi
+    ((i++)) || true
+  done
+  msg ""
+
+  # Prompt user
+  printf "  Choose model [1-%d]: " "$count" >&2
+  local choice
+  read -r choice </dev/tty || return 1
+
+  # Validate choice
+  if ! [[ "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt "$count" ]]; then
+    msg "❌ Invalid choice"
+    return 1
+  fi
+
+  # Return selected model (strip quotes if present)
+  local selected="${models[$((choice - 1))]}"
+  echo "$selected" | sed 's/^"//;s/"$//'  # Remove surrounding quotes if any
+  return 0
+}
+
+# Update .claude/settings.json with selected model (Phase 3 Phase 3)
+update_project_settings() {
+  local model=$1
+  local settings_file=".claude/settings.json"
+
+  # Create .claude directory if missing
+  mkdir -p .claude
+
+  # Create or update settings
+  if [[ ! -f "$settings_file" ]]; then
+    # Create new file
+    echo "{" > "$settings_file"
+    echo "  \"model\": \"$model\"" >> "$settings_file"
+    echo "}" >> "$settings_file"
+    msg "✓ Created: $settings_file"
+  else
+    # Merge with existing settings (update model key only)
+    local updated
+    updated=$(jq --arg model "$model" '.model = $model' "$settings_file" 2>/dev/null)
+
+    if [[ -n "$updated" ]]; then
+      echo "$updated" > "$settings_file"
+      msg "✓ Updated: $settings_file"
+    else
+      msg "⚠️  Could not update settings (jq failed)"
+      return 1
+    fi
+  fi
+
+  msg "  Model: $model"
+  return 0
+}
+
+# Auto-configure local models if available (Phase 3 Phase 4)
+auto_configure_local_models() {
+  local endpoint=$1
+
+  # Only for local endpoints (not cloud profiles)
+  if [[ "$endpoint" != http://localhost* ]]; then
+    return 0  # Skip for cloud endpoints
+  fi
+
+  msg ""
+  msg "→ Detecting local models..."
+
+  local selected_model
+  selected_model=$(select_model_interactive "$endpoint") || return 1
+
+  if [[ -z "$selected_model" ]]; then
+    msg "⚠️  No suitable models found"
+    return 1
+  fi
+
+  msg ""
+
+  # Save to project settings
+  update_project_settings "$selected_model" || return 1
+
+  msg ""
+  msg "✓ Both \`claude\` and \`claudeme\` will use this model in this project"
+  msg ""
+
+  return 0
+}
+
 # Detect tool from endpoint URL
 detect_tool_from_endpoint() {
   local endpoint=$1
@@ -1419,6 +1581,11 @@ cmd_resolve() {
     mkdir -p "$iso_dir"
     env_block+=$'\n'"CLAUDEME_SESSION_DIR=$iso_dir"
 
+    # ── Phase 3 Enhancement: Auto-configure local models ────────────────────
+    if [[ -z "$resolved_profile" ]]; then
+      auto_configure_local_models "$resolved_url" || true
+    fi
+
     # ── Phase 5: Save full session (tool + model + endpoint) ─────────────────
     # For local sessions, capture tool and model for instant resume
     local save_tool="unknown" save_model="unknown"
@@ -1440,6 +1607,11 @@ cmd_resolve() {
       session_update "$iso_dir" "$resolved_profile" "$resolved_url"
     fi
   else
+    # ── Phase 3 Enhancement: Auto-configure local models ────────────────────
+    if [[ -z "$resolved_profile" ]]; then
+      auto_configure_local_models "$resolved_url" || true
+    fi
+
     # ── Phase 5: Save full session (tool + model + endpoint) ─────────────────
     local save_tool="unknown" save_model="unknown"
 

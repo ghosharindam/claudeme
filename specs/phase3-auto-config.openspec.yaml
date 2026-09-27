@@ -1,0 +1,270 @@
+openspec: 1.0.0
+
+info:
+  title: Phase 3 Enhancement - Auto-Configure Local Models
+  version: 0.1.0
+  status: draft
+  created: 2026-09-27
+  authors:
+    - Claude Haiku 4.5
+
+summary: |
+  When `claudeme` detects local models, automatically create/update `.claude/settings.json`
+  in the current project directory so Claude Code uses the local model by default.
+
+  This eliminates manual configuration and makes local model setup seamless.
+
+problem:
+  current_state: |
+    When user runs `claudeme` with local models available:
+    1. claudeme-resolve finds the endpoint (e.g., http://localhost:4000)
+    2. Sets ANTHROPIC_BASE_URL environment variable
+    3. But Claude Code's settings still show default "haiku" (Anthropic's model)
+    4. Claude Code tries to use "haiku" on localhost:4000, fails, falls back to Anthropic
+
+  issues:
+    - User must manually edit .claude/settings.json to use local model
+    - Running `claude` (not `claudeme`) still uses Anthropic, not local setup
+    - Inconsistent behavior between first run and subsequent runs
+    - Confusing UX: user thinks they're using local, but actually using cloud
+
+  goal: |
+    Auto-detect available local models and configure Claude Code to use them:
+    - Detect available models from endpoint
+    - If one model: auto-select and save
+    - If multiple models: prompt user to choose
+    - Save selection to .claude/settings.json
+    - Both `claude` and `claudeme` now use local models seamlessly
+
+design_principles:
+  - principle: Zero manual configuration
+    description: User just runs `claudeme`, everything works
+
+  - principle: Per-project settings
+    description: Each project can have different local model preference
+
+  - principle: User control
+    description: If multiple models available, ask user which one to use
+
+  - principle: Persistent across commands
+    description: `claude` and `claudeme` both use the selected model
+
+  - principle: Cloud profiles unaffected
+    description: Only auto-config for local endpoints, not cloud profiles
+
+components:
+  configs:
+    - name: model-catalog
+      type: yaml
+      location: ~/.claudeme/model-catalog.yaml
+      purpose: Provides model metadata (RAM, quality, speed)
+      usage: Already exists from Phase 1
+
+    - name: preferences
+      type: yaml
+      location: ~/.claudeme/preferences.yaml
+      purpose: User's preferred models list
+      usage: Used to recommend first model if available
+
+  files:
+    - name: .claude/settings.json
+      type: json
+      location: Project directory (created if missing)
+      purpose: Claude Code's project settings
+      content: |
+        {
+          "model": "ollama/qwen2.5-coder:7b"
+        }
+      notes: |
+        - Created only for local endpoints
+        - Not created for cloud profiles
+        - Git-ignored (add to .gitignore)
+
+flows:
+  - name: detect-and-auto-configure
+    description: Main flow when local endpoint detected
+    trigger: User runs `claudeme` and local endpoint found
+
+    steps:
+      - step: 1-detect-models
+        action: Get available models from endpoint
+        inputs:
+          - endpoint URL (e.g., http://localhost:4000)
+        outputs:
+          - list of available models
+        logic: |
+          For LiteLLM/Ollama endpoints:
+            curl -s $endpoint/v1/models | jq '.data[].id'
+          Returns array of model IDs
+
+      - step: 2-filter-models
+        action: Filter to coding models only (exclude vision/embed)
+        inputs:
+          - raw model list
+          - excluded_patterns from catalog
+        outputs:
+          - filtered list of suitable models
+        logic: |
+          Use is_coding_model() function
+          Remove vision, embed, image models
+          Keep only models that make sense for code
+
+      - step: 3-model-selection
+        action: Decide which model to use
+        inputs:
+          - filtered model list
+          - user preferences
+          - available memory
+        outputs:
+          - selected model name
+        logic: |
+          IF model_count == 0:
+            return nothing (no suitable models)
+
+          ELSE IF model_count == 1:
+            select that model (auto)
+            show "Using: <model>"
+
+          ELSE (multiple models):
+            ask user to choose:
+              1) Model A (4.3GB, balanced)
+              2) Model B (2.1GB, faster)
+              Choice: _
+            Remember choice
+
+          ELSE IF multiple but one is in preferences:
+            auto-select first match from preferences
+            show "Using: <model>"
+
+      - step: 4-check-memory
+        action: Verify model fits in available RAM
+        inputs:
+          - selected model
+          - available memory
+        outputs:
+          - go/no-go decision
+        logic: |
+          Use check_model_fits(model, available_gb)
+          IF doesn't fit:
+            warn user
+            suggest cleanup-advisor
+            ask to proceed anyway or select smaller
+
+      - step: 5-save-settings
+        action: Create/update .claude/settings.json
+        inputs:
+          - selected model
+          - endpoint type (litellm, ollama, llama-server)
+        outputs:
+          - .claude/settings.json written
+        logic: |
+          Create file if missing:
+            {
+              "model": "ollama/qwen2.5-coder:7b"
+            }
+
+          Merge if file exists (only update "model" key)
+
+          Show: "✓ Saved: .claude/settings.json"
+
+      - step: 6-show-confirmation
+        action: Confirm configuration to user
+        outputs:
+          - visual confirmation
+        template: |
+          ✓ Local models detected
+            Model: qwen2.5-coder:7b
+            Endpoint: http://localhost:4000
+            Saved to: .claude/settings.json
+
+          (Both `claude` and `claudeme` will use this model in this project)
+
+success_criteria:
+  - criterion: Auto-detection works
+    validation: |
+      When local endpoint found, models are detected without user action
+
+  - criterion: Single model auto-selects
+    validation: |
+      If one suitable model available, it's selected automatically
+      No prompt shown
+
+  - criterion: Multiple models prompt
+    validation: |
+      If multiple models available, user is prompted to choose
+      Selection saved
+
+  - criterion: Settings file created
+    validation: |
+      .claude/settings.json is created/updated with selected model
+      File is valid JSON
+      "model" field contains full model ID
+
+  - criterion: Both commands work
+    validation: |
+      After config, both `claude` and `claudeme` use the local model
+      `claude` doesn't fall back to Anthropic
+
+  - criterion: Cloud profiles unaffected
+    validation: |
+      When using `claudeme gcp` or other profiles, no .claude/settings.json created
+      Only local endpoints trigger auto-config
+
+  - criterion: Git-safe
+    validation: |
+      .claude/settings.json can be gitignored
+      No hardcoded paths
+      Portable across systems
+
+implementation:
+  phases:
+    - phase: 1
+      name: Add model detection function
+      tasks:
+        - Create get_available_models() - curl endpoint, parse models
+        - Create filter_coding_models() - remove non-coding models
+        - Test with LiteLLM endpoint
+
+    - phase: 2
+      name: Add model selection logic
+      tasks:
+        - Create select_model_interactive() - prompt if multiple
+        - Create auto_select_model() - auto-select if one or in preferences
+        - Handle memory checks before selection
+
+    - phase: 3
+      name: Add settings persistence
+      tasks:
+        - Create update_project_settings() - write .claude/settings.json
+        - Merge with existing settings (don't overwrite other keys)
+        - Add confirmation message
+
+    - phase: 4
+      name: Integrate into cmd_resolve
+      tasks:
+        - Call auto-config before returning env block
+        - Only for local endpoints (check if resolved_profile is empty)
+        - Add --skip-config flag to bypass if needed
+
+    - phase: 5
+      name: Test end-to-end
+      tasks:
+        - Test with Ollama (one model)
+        - Test with Ollama (multiple models)
+        - Test with llama-server
+        - Test with cloud profiles (should skip)
+        - Verify both `claude` and `claudeme` work
+        - Verify git-safe (no tracking changes)
+
+open_questions:
+  - Should we add --skip-config flag to skip auto-config?
+  - Should we show the model selection menu even for one model (educational)?
+  - Should we auto-update on each run if model list changes?
+  - Should we preserve other keys in .claude/settings.json?
+
+related:
+  - Phase 1: Config infrastructure
+  - Phase 2: Detection logic
+  - Phase 3: Smart selection (this enhancement extends it)
+  - Phase 4: Auto-start LiteLLM
+  - Phase 5: Session management
