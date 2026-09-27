@@ -1184,8 +1184,17 @@ resume_session() {
 get_available_models() {
   local endpoint=$1
 
-  # Query endpoint for available models
-  # Works with LiteLLM, Ollama (via LiteLLM), llama-server
+  # For LiteLLM proxy on :4000, query Ollama directly instead
+  # (LiteLLM might be running with wrong/missing models)
+  if [[ "$endpoint" == "http://localhost:4000" ]]; then
+    if command -v ollama &>/dev/null && pgrep -q ollama; then
+      # Query Ollama directly and format as ollama/<model>
+      ollama list 2>/dev/null | tail -n +2 | awk '{print "\"ollama/" $1 "\""}' | grep -v ':latest"$' | sed 's/:latest"/"/'
+      return 0
+    fi
+  fi
+
+  # For other endpoints (llama-server, etc), query the endpoint
   if curl -s "$endpoint/v1/models" 2>/dev/null | jq '.data[].id' 2>/dev/null; then
     return 0
   fi
