@@ -39,15 +39,20 @@ EOF
 fi
 
 # Storage locations for profiles and session history
-PROFILES_FILE="$HOME/.claudeme/profiles.json"   # Named cloud endpoints (gcp, aws, etc.)
-SESSIONS_FILE="$HOME/.claudeme/sessions.json"   # Tracks last-used endpoint per directory
-ISOLATED_BASE="$HOME/.claudeme/isolated"        # Session storage for --isolated mode
+PROFILES_FILE="$HOME/.claudeme/profiles.json"        # Named cloud endpoints (gcp, aws, etc.)
+SESSIONS_FILE="$HOME/.claudeme/sessions.json"        # Tracks last-used endpoint per directory
+ISOLATED_BASE="$HOME/.claudeme/isolated"             # Session storage for --isolated mode
+
+# Config file locations (Phase 2: Config-driven detection)
+MODEL_CATALOG="$HOME/.claudeme/model-catalog.yaml"   # Model metadata and thresholds
+PREFERENCES="$HOME/.claudeme/preferences.yaml"       # User preferences
 
 # ── Utilities ──────────────────────────────────────────────────────────────────
 
 die()  { echo "claudeme: $*" >&2; exit 1; }  # Error message + exit
 msg()  { echo "  $*" >&2; }                   # User-facing message (to stderr)
 need_jq() { command -v jq &>/dev/null || die "jq is required — install with: brew install jq"; }
+need_yq() { command -v yq &>/dev/null || die "yq is required — install with: brew install yq"; }  # For YAML parsing
 
 ensure_profiles() {
   mkdir -p "$(dirname "$PROFILES_FILE")"
@@ -727,3 +732,145 @@ case "${1:-}" in
                   cmd_resolve        "$@"     ;;
   *)              die "unknown subcommand: $1 — try: claudeme list" ;;
 esac
+
+# ── Phase 2: Config Loading & Detection ───────────────────────────────────────
+
+# Load config value from YAML using yq
+# Usage: get_config "file.yaml" ".path.to.value"
+get_config() {
+  local file=$1
+  local path=$2
+  
+  if [[ ! -f "$file" ]]; then
+    return 1
+  fi
+  
+  yq eval "$path" "$file" 2>/dev/null || echo ""
+}
+
+# Get available memory in GB
+get_available_memory_gb() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS - use vm_stat
+    local page_size=$(sysctl -n hw.pagesize)
+    local pages_free=$(vm_stat | awk '/Pages free/ {print $3}' | tr -d '.')
+    local pages_inactive=$(vm_stat | awk '/Pages inactive/ {print $3}' | tr -d '.')
+    local pages_available=$((pages_free + pages_inactive))
+    local bytes_available=$((pages_available * page_size))
+    local gb_available=$(echo "scale=1; $bytes_available / 1024 / 1024 / 1024" | bc)
+    echo "$gb_available"
+  else
+    # Linux - use free
+    free -g | awk '/^Mem:/ {print $7}'
+  fi
+}
+
+# Get memory tier based on available GB (from config)
+# Returns: high, medium, low, or very_low
+get_memory_tier() {
+  local available_gb=$1
+  
+  # Read thresholds from config (not hardcoded!)
+  local high_min=$(get_config "$MODEL_CATALOG" ".memory_thresholds.high.min_available_gb")
+  local med_min=$(get_config "$MODEL_CATALOG" ".memory_thresholds.medium.min_available_gb")
+  local low_min=$(get_config "$MODEL_CATALOG" ".memory_thresholds.low.min_available_gb")
+  
+  # Default values if config missing
+  high_min=${high_min:-16}
+  med_min=${med_min:-8}
+  low_min=${low_min:-4}
+  
+  if (( $(echo "$available_gb >= $high_min" | bc -l) )); then
+    echo "high"
+  elif (( $(echo "$available_gb >= $med_min" | bc -l) )); then
+    echo "medium"
+  elif (( $(echo "$available_gb >= $low_min" | bc -l) )); then
+    echo "low"
+  else
+    echo "very_low"
+  fi
+}
+
+# Detect running tools
+detect_tools() {
+  local tools=""
+  
+  # Check llama-server
+  if pgrep -x "llama-server" >/dev/null 2>&1; then
+    tools="${tools}llama-server "
+  fi
+  
+  # Check Ollama
+  if pgrep -x "ollama" >/dev/null 2>&1; then
+    tools="${tools}ollama "
+  fi
+  
+  # Check LiteLLM (by port)
+  local litellm_port=$(get_config "$PREFERENCES" ".litellm.port")
+  litellm_port=${litellm_port:-4000}
+  
+  if lsof -i ":$litellm_port" >/dev/null 2>&1; then
+    tools="${tools}litellm "
+  fi
+  
+  echo "$tools" | xargs  # Trim whitespace
+}
+
+# Detect loaded models from Ollama
+detect_ollama_models() {
+  if ! command -v ollama >/dev/null 2>&1; then
+    return
+  fi
+  
+  # Get loaded models with ollama ps
+  ollama ps --format json 2>/dev/null | jq -r '.name' 2>/dev/null || true
+}
+
+# Check if model is a coding model (not vision/embedding)
+is_coding_model() {
+  local model=$1
+  
+  # Read excluded patterns from config
+  local excluded=$(get_config "$MODEL_CATALOG" ".excluded_patterns[]")
+  
+  # Check if model matches any excluded pattern
+  while IFS= read -r pattern; do
+    if [[ -n "$pattern" ]] && [[ "$model" =~ $pattern ]]; then
+      return 1  # Not a coding model
+    fi
+  done <<< "$excluded"
+  
+  return 0  # Is a coding model
+}
+
+# Get model RAM requirement from catalog
+get_model_ram() {
+  local model_name=$1
+  
+  # Try to find in catalog
+  # Format: qwen2.5-coder:7b -> check qwen2.5-coder.versions.7b.ram_gb
+  local base_name="${model_name%%:*}"
+  local version="${model_name#*:}"
+  
+  # Handle case where no version specified
+  if [[ "$version" == "$base_name" ]]; then
+    version="7b"  # Default
+  fi
+  
+  local ram=$(get_config "$MODEL_CATALOG" ".coding_models.\"$base_name\".versions.\"$version\".ram_gb")
+  
+  if [[ -n "$ram" && "$ram" != "null" ]]; then
+    echo "$ram"
+  else
+    # Fallback: estimate based on size
+    case "$version" in
+      *34b*|*33b*) echo "20" ;;
+      *14b*|*13b*|*16b*) echo "8" ;;
+      *7b*|*6.7b*) echo "4.5" ;;
+      *3b*) echo "2" ;;
+      *1.5b*) echo "1.5" ;;
+      *) echo "4" ;;  # Default guess
+    esac
+  fi
+}
+
