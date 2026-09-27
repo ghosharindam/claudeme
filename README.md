@@ -213,6 +213,39 @@ litellm --model ollama/qwen2.5-coder:7b --port 4000
 litellm --model ollama/deepseek-coder:6.7b --port 4000
 ```
 
+#### Auto-configures Claude Code settings
+
+When you run `claudeme` for the first time in a project, it automatically detects available local models and creates `.claude/settings.json` so **both `claude` and `claudeme` use the local model**:
+
+**Single model (auto-select):**
+```
+$ claudeme
+
+→ Detecting local models...
+✓ Local model detected
+  Model: ollama/qwen2.5-coder:7b
+
+✓ Created: .claude/settings.json
+  Model: ollama/qwen2.5-coder:7b
+
+✓ Both `claude` and `claudeme` will use this model in this project
+```
+
+**Multiple models (choose):**
+```
+✓ Multiple local models available
+
+  1) ollama/qwen2.5-coder:7b (4.3GB)
+  2) deepseek-coder:6.7b (4.5GB)
+
+Choose model [1-2]: 1
+✓ Saved to .claude/settings.json
+```
+
+Now both commands work seamlessly:
+- `claudeme` → Uses local model ✅
+- `claude` → Uses local model ✅ (not Anthropic!)
+
 #### Smart session resume
 
 `claudeme -c` now does **instant resume** if your model is still loaded in memory:
