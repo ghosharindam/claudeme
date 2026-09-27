@@ -639,18 +639,24 @@ detect_ollama_models() {
 # Check if model is a coding model (not vision/embedding)
 is_coding_model() {
   local model=$1
-  
-  # Read excluded patterns from config
+
+  # First check excluded patterns (takes precedence)
   local excluded=$(get_config "$MODEL_CATALOG" ".excluded_patterns[]")
-  
-  # Check if model matches any excluded pattern
   while IFS= read -r pattern; do
     if [[ -n "$pattern" ]] && [[ "$model" =~ $pattern ]]; then
-      return 1  # Not a coding model
+      return 1  # Excluded - not a coding model
     fi
   done <<< "$excluded"
-  
-  return 0  # Is a coding model
+
+  # Then check coding patterns (positive match)
+  local coding=$(get_config "$MODEL_CATALOG" ".coding_patterns[]")
+  while IFS= read -r pattern; do
+    if [[ -n "$pattern" ]] && [[ "$model" =~ $pattern ]]; then
+      return 0  # Matches coding pattern
+    fi
+  done <<< "$coding"
+
+  return 1  # Doesn't match any coding pattern - not a coding model
 }
 
 # Get model RAM requirement from catalog
@@ -1202,7 +1208,7 @@ get_available_models() {
   return 1
 }
 
-# Filter to coding models only (Phase 3 Phase 1)
+# Get all models, sorted with coding models first (Phase 3 Phase 1)
 filter_coding_models() {
   local endpoint=$1
 
@@ -1213,11 +1219,24 @@ filter_coding_models() {
     return 1
   fi
 
-  # Filter out non-coding models using is_coding_model
-  echo "$models" | while read -r model; do
+  # Sort models: coding models first, then general models
+  local coding_models=()
+  local general_models=()
+
+  while IFS= read -r model; do
     if is_coding_model "$model"; then
-      echo "$model"
+      coding_models+=("$model")
+    else
+      general_models+=("$model")
     fi
+  done <<< "$models"
+
+  # Output coding models first, then general
+  for model in "${coding_models[@]}"; do
+    echo "$model"
+  done
+  for model in "${general_models[@]}"; do
+    echo "$model"
   done
 }
 
@@ -1258,10 +1277,18 @@ select_model_interactive() {
     local base_model="${model#ollama/}"  # Remove ollama/ prefix
     local ram=$(get_model_ram "$base_model" 2>/dev/null || echo "?")
 
-    if [[ "$ram" == "?" ]]; then
-      msg "  $i) $model"
+    # Check if it's a coding-focused model
+    local label=""
+    if is_coding_model "$base_model"; then
+      label=" [coding]"
     else
-      msg "  $i) $model (${ram}GB)"
+      label=" [general]"
+    fi
+
+    if [[ "$ram" == "?" ]]; then
+      msg "  $i) $model$label"
+    else
+      msg "  $i) $model (${ram}GB)$label"
     fi
     ((i++)) || true
   done

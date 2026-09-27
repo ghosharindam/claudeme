@@ -140,6 +140,13 @@ coding_models:
 
 # Models to exclude (patterns)
 # These models are NOT suitable for coding work
+# Patterns for coding-focused models (only include these)
+coding_patterns:
+  - "coder"         # qwen2.5-coder, deepseek-coder, codellama, starcoder
+  - "code"          # code-llama, etc
+  - "qwen2.5:.*-instruct"  # qwen2.5:7b-instruct is good for coding
+
+# Patterns to exclude (takes precedence over coding_patterns)
 excluded_patterns:
   - "vision"        # Vision models (llama3.2-vision, llava)
   - "llava"         # Vision models
@@ -148,6 +155,10 @@ excluded_patterns:
   - "xl"            # Extra large diffusion models
   - "sdxl"          # Stable Diffusion
   - "whisper"       # Speech recognition
+  - "gemma"         # General-purpose (not coding-focused)
+  - "llama3"        # General-purpose
+  - "phi"           # General-purpose
+  - "r1"            # Reasoning models (not coding-focused)
 
 # Memory tier thresholds
 # Used to recommend appropriate model sizes based on available RAM
